@@ -4,7 +4,7 @@
 
 一个本地优先的 Telegram bot，用于个人记忆、文件、日程，以及轻量的消息转达流程。
 
-它直接通过 pi-mono SDK 运行，把规范事实保存在仓库里，并把 Telegram 视为平台适配器，而不是整个系统的中心。
+它通过本地 OpenCode 服务运行，把规范事实保存在仓库里，并把 Telegram 视为平台适配器，而不是整个系统的中心。
 
 ## 它能做什么
 
@@ -53,7 +53,7 @@
 
 ### 会话作用域
 
-短期对话上下文由 pi SDK 会话按作用域保存：
+短期对话上下文由 OpenCode 会话按作用域保存：
 
 - **私聊** -> 每个用户一个会话
 - **群 / 超级群** -> 每个群一个会话
@@ -83,7 +83,7 @@
 cp config.toml.example config.toml
 cp .env.example .env
 just install
-# 先配置 pi 的凭证 / 可用模型
+# 通过 npm 使用项目内的 OpenCode 二进制，不依赖全局安装
 just serve
 ```
 
@@ -112,6 +112,9 @@ default_timezone = "Asia/Tokyo"
 [maintenance]
 enabled = true
 idle_after_minutes = 15
+
+[opencode]
+base_url = "http://127.0.0.1:4096"
 ```
 
 一些常用的可选项：
@@ -122,6 +125,7 @@ idle_after_minutes = 15
 - `bot.language`：固定 UI 文本使用的默认界面语言；可选 `zh-CN` 或 `en`
 - `bot.default_timezone`：用户未显式提供时使用的默认时区
 - `maintenance.idle_after_minutes`：空闲多少分钟后触发 maintenance
+- `opencode.base_url`：本地 OpenCode 服务地址
 
 ## Telegram 使用前提
 
@@ -163,5 +167,7 @@ npm run test:nl
 npm run test:live
 just test
 ```
+
+`just serve` 会先通过 `npm exec -- opencode serve --port 4096` 启动项目内的 OpenCode 服务，再启动 bot。
 
 当前回归测试覆盖了确定性的存储行为和真实自然语言流程，包括日程 CRUD、用户访问级别变更、外发消息、符合 persona 的用户可见文案，以及按用户时区换算后注入的时间上下文。

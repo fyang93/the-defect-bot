@@ -2,7 +2,7 @@
  * Single-scenario live test runner.
  * Usage: npm exec tsx tests/run-scenario.ts <scenario-number>
  *
- * Runs one scenario at a time against a live pi SDK setup,
+ * Runs one scenario at a time against a live OpenCode setup,
  * writes results to logs/test-runs/live-assistant.log.
  */
 
@@ -176,7 +176,7 @@ async function main() {
   try {
     await agentService.ensureReady();
   } catch {
-    console.error("❌ pi SDK is not ready. Configure pi credentials first.");
+    console.error("❌ OpenCode is not ready. Start the local OpenCode server first.");
     process.exit(1);
   }
 

@@ -60,7 +60,7 @@ async function ensureUsableStartupModel(): Promise<void> {
   try {
     const { models } = await agentService.listModels();
     if (models.includes(state.model)) return;
-    await logger.warn(`configured model ${state.model} is unavailable; falling back to the default pi model`);
+    await logger.warn(`configured model ${state.model} is unavailable; falling back to the default OpenCode model`);
     state.model = null;
     await persistState(config.paths.stateFile);
   } catch (error) {

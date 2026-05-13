@@ -1,7 +1,7 @@
 /**
  * Live assistant integration test.
  *
- * Runs against a live pi SDK setup. Each scenario calls runAssistantTurn()
+ * Runs against a live OpenCode setup. Each scenario calls runAssistantTurn()
  * directly and logs the result. After all scenarios complete, read the log to
  * verify correctness.
  *
@@ -54,7 +54,7 @@ function createTestConfig(repoRoot: string): AppConfig {
 }
 
 async function createTempEnv(): Promise<{ config: AppConfig; repoRoot: string }> {
-  // Use the real project root so pi SDK can find repository CLI aliases.
+  // Use the real project root so OpenCode can find repository CLI aliases.
   // System files are backed up and restored after the test.
   const repoRoot = hostRepoRoot;
   await mkdir(path.join(repoRoot, "system"), { recursive: true });
@@ -168,7 +168,7 @@ async function main() {
   try {
     await agentService.ensureReady();
   } catch (error) {
-    console.error("❌ pi SDK is not ready. Configure pi credentials first.");
+    console.error("❌ OpenCode is not ready. Start the local OpenCode server first.");
     process.exit(1);
   }
 

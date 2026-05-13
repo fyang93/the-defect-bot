@@ -4,7 +4,7 @@
 
 A local-first Telegram bot for personal memory, files, events, reminders, and lightweight relay workflows.
 
-It runs directly through the pi-mono SDK, keeps canonical state in the repository, and treats Telegram as a platform adapter rather than the center of the architecture.
+It runs through a local OpenCode server, keeps canonical state in the repository, and treats Telegram as a platform adapter rather than the center of the architecture.
 
 ## What it does
 
@@ -53,7 +53,7 @@ The current conversation path is centered on a single assistant lane:
 
 ### Conversation scoping
 
-Short-term conversational context is kept in pi SDK sessions by scope:
+Short-term conversational context is kept in OpenCode sessions by scope:
 
 - **private chat** -> one session per user
 - **group / supergroup** -> one session per chat
@@ -76,7 +76,7 @@ The repository keeps the skill set intentionally small. Repository-specific work
 cp config.toml.example config.toml
 cp .env.example .env
 just install
-# configure pi credentials/models first
+# uses the project-local OpenCode binary via npm, no global install required
 just serve
 ```
 
@@ -105,6 +105,9 @@ default_timezone = "Asia/Tokyo"
 [maintenance]
 enabled = true
 idle_after_minutes = 15
+
+[opencode]
+base_url = "http://127.0.0.1:4096"
 ```
 
 Useful optional settings:
@@ -115,6 +118,7 @@ Useful optional settings:
 - `bot.language`: default UI locale for fixed UI text; choose `zh-CN` or `en`
 - `bot.default_timezone`: fallback timezone used when the user has not explicitly provided one
 - `maintenance.idle_after_minutes`: run maintenance after this many idle minutes
+- `opencode.base_url`: local OpenCode server address
 
 ## Telegram prerequisites
 
@@ -156,5 +160,7 @@ npm run test:nl
 npm run test:live
 just test
 ```
+
+`just serve` starts the project-local OpenCode server with `npm exec -- opencode serve --port 4096` before launching the bot.
 
 The regression suite covers deterministic storage behavior and live natural-language flows, including schedule CRUD, user access-level changes, outbound delivery, persona-aware reply composition, and requester-timezone-aware time injection.

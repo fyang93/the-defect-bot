@@ -1,13 +1,17 @@
 ---
 name: custom-toolbox
-description: Use when the task is a small project-specific utility workflow that does not belong to memory, cli-events, cli-access, cli-rules, or cli-telegram, such as filling a 研究業務日誌 .xlsx workbook with the local helper script and returning the generated file.
+description: Handles narrow project-specific utility workflows that do not belong to memory, cli-events, cli-access, cli-rules, or cli-telegram. Use when the task matches a small local helper flow such as filling a 研究業務日誌 .xlsx workbook and returning the generated file.
 ---
 
 # Custom toolbox
 
-Use this skill for small project-specific utility tools and cookbook-like workflows that are too narrow for dedicated standalone skills.
+## Quick start
 
-## Boundary
+- If the user uploaded a `.xlsx` file whose filename contains `研究業務日誌` and asked to fill or auto-complete it, read [tools/research-worklog-xlsx.md](tools/research-worklog-xlsx.md).
+
+## Workflows
+
+### Route correctly
 
 Do not use this skill when the task clearly belongs to:
 
@@ -19,11 +23,7 @@ Do not use this skill when the task clearly belongs to:
 
 Use this skill when the task is a narrow project-specific utility flow and the main work is described by a local tool note in this directory.
 
-## Routing
-
-- If the user uploaded a `.xlsx` file whose filename contains `研究業務日誌` and asked you to fill it or auto-complete it, read [tools/research-worklog-xlsx.md](tools/research-worklog-xlsx.md).
-
-## General rules
+### General rules
 
 - For Python helpers, use `uv run ...` rather than bare `python3`.
 - Manage Python dependencies with uv rather than pip.
