@@ -17,7 +17,7 @@
 
 ## 架构
 
-整体上，它是一个简洁的分层系统：bot runtime、平台适配、AI、仓库 CLI、领域事务、档案，并优先把仓库 CLI 作为确定性执行边界。最近一轮深挖已经把调度生命周期收口到 `ScheduleEngine`，把启动 / runtime 编排收口到 bot lifecycle module，并把 OpenCode 会话生命周期收口到内部的 `SessionBroker` seam。
+整体上，它是一个简洁的分层系统：bot 运行时、平台适配、AI、仓库 CLI、领域事务、档案，并优先把仓库 CLI 作为确定性执行边界。最近一轮深挖已经把调度生命周期收口到 `ScheduleEngine`，把启动与运行时编排收口到 bot 生命周期模块，并把 OpenCode 会话生命周期收口到内部的 `SessionBroker` 接缝。
 
 ```text
 交互
