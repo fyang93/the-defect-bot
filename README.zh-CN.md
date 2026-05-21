@@ -17,7 +17,7 @@
 
 ## 架构
 
-整体上，它是一个简洁的分层系统：bot runtime、平台适配、AI、仓库 CLI、领域事务、档案，并优先把仓库 CLI 作为确定性执行边界。
+整体上，它是一个简洁的分层系统：bot runtime、平台适配、AI、仓库 CLI、领域事务、档案，并优先把仓库 CLI 作为确定性执行边界。最近一轮深挖已经把调度生命周期收口到 `ScheduleEngine`，把启动 / runtime 编排收口到 bot lifecycle module，并把 OpenCode 会话生命周期收口到内部的 `SessionBroker` seam。
 
 ```text
 交互
@@ -48,7 +48,7 @@
 - 助手直接理解请求，并在需要时直接执行工作
 - 当前方向是由 runtime 代码负责当前回合回复发布，而 assistant 主要使用仓库内 CLI 和 skills 完成工作
 - runtime 代码负责等待态 UI、中断、启动阶段的短暂聚合 / 输入合并，以及避免重复发送
-- 固定 UI 文本保留在 i18n 中；自然对话措辞交给模型生成
+- i18n 保持最小化，只保留和 command / UI 直接绑定的文本；自然对话措辞交给模型生成
 - assistant 的自然回复语言跟随用户实际对话语言，而固定 UI 文本跟随配置中的默认界面语言
 
 ### 会话作用域
@@ -71,11 +71,12 @@
 
 仓库里的 skill 集合保持得很小。仓库特定工作应优先走 CLI + skills：
 
-- `cli-shared`：repository CLI 的共享 / 基础指导
 - `cli-events`：事件、提醒与自动化流程
 - `cli-telegram`：Telegram 外发投递相关流程
 - `cli-access`：用户与授权相关流程
+- `cli-rules`：面向未来的持久 assistant 规则
 - `memory`：仓库本地的长期笔记、偏好与事实
+- `custom-toolbox`：窄而专用的项目工具流程
 
 ## 快速开始
 
