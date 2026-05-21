@@ -1,5 +1,6 @@
 import type { Bot, Context } from "grammy";
 import type { AppConfig } from "bot/app/types";
+import { logger } from "bot/app/logger";
 import type { AiService } from "bot/ai";
 import type { EventRecord, ReminderInstance } from "./types";
 import { deliverDueSchedules, startScheduleLoop } from "./delivery";
@@ -29,7 +30,11 @@ export class ScheduleEngine {
       if (!event) return { changed: false, skipped: true, reason: "missing-event" };
       return prepareScheduleDeliveryTextAndPersistIfUnchanged(this.config, this.agentService, event, input.now || new Date());
     }
+    const events = await readEventRecords(this.config);
+    const activeCount = events.filter((event) => event.status === "active").length;
+    await logger.info(`schedule engine prepare start activeEvents=${activeCount}`);
     await prewarmScheduleDeliveryTexts(this.config, this.agentService);
+    await logger.info(`schedule engine prepare end activeEvents=${activeCount}`);
     return { changed: true };
   }
 

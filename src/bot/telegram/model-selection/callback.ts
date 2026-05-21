@@ -1,6 +1,7 @@
 import type { Context } from "grammy";
 import type { AppConfig } from "bot/app/types";
 import { state } from "bot/app/state";
+import { tForUser } from "bot/app/i18n";
 import {
   buildProviderKeyboard,
   buildProviderModelKeyboard,
@@ -31,7 +32,7 @@ export async function handleModelCallback(ctx: Context, deps: ModelCallbackDepen
 
   const { config } = deps;
   const rest = data.slice(MODEL_CALLBACK_PREFIX.length);
-  const backLabel = "Back";
+  const backLabel = tForUser(config, ctx.from?.id, "ui_back");
 
   try {
     const { defaults, models } = await deps.listModels();
@@ -42,7 +43,7 @@ export async function handleModelCallback(ctx: Context, deps: ModelCallbackDepen
       if (providers.length === 1) {
         const provider = providers[0];
         if (ctx.chat && ctx.callbackQuery?.message?.message_id) {
-          await deps.editMessageTextFormattedSafe(ctx, ctx.chat.id, ctx.callbackQuery.message.message_id, `Choose a model from ${provider}:`, {
+          await deps.editMessageTextFormattedSafe(ctx, ctx.chat.id, ctx.callbackQuery.message.message_id, tForUser(config, ctx.from?.id, "choose_model_under_provider", { provider }), {
             reply_markup: buildProviderModelKeyboard(provider, models, activeModel, config.telegram.menuPageSize, backLabel, 0),
           });
         }
@@ -52,7 +53,7 @@ export async function handleModelCallback(ctx: Context, deps: ModelCallbackDepen
       const page = Number(rest.split(":", 2)[1] || 0);
       const callbackMessage = callbackMessageRef(ctx);
       if (callbackMessage) {
-        await deps.editMessageTextFormattedSafe(ctx, callbackMessage.chatId, callbackMessage.messageId, "Choose a model provider:", {
+        await deps.editMessageTextFormattedSafe(ctx, callbackMessage.chatId, callbackMessage.messageId, tForUser(config, ctx.from?.id, "choose_provider"), {
           reply_markup: buildProviderKeyboard(models, activeModel, config.telegram.menuPageSize, backLabel, page),
         });
       }
@@ -64,11 +65,11 @@ export async function handleModelCallback(ctx: Context, deps: ModelCallbackDepen
       const [, provider, pageRaw] = rest.split(":", 3);
       const providerModels = modelsForProvider(models, provider || "");
       if (providerModels.length === 0) {
-        await ctx.answerCallbackQuery({ show_alert: true });
+        await ctx.answerCallbackQuery({ text: tForUser(config, ctx.from?.id, "model_unavailable"), show_alert: true });
         return true;
       }
       if (ctx.chat && ctx.callbackQuery?.message?.message_id) {
-        await deps.editMessageTextFormattedSafe(ctx, ctx.chat.id, ctx.callbackQuery.message.message_id, `Choose a model from ${provider}:`, {
+        await deps.editMessageTextFormattedSafe(ctx, ctx.chat.id, ctx.callbackQuery.message.message_id, tForUser(config, ctx.from?.id, "choose_model_under_provider", { provider }), {
           reply_markup: buildProviderModelKeyboard(provider, models, activeModel, config.telegram.menuPageSize, backLabel, Number(pageRaw || 0)),
         });
       }
@@ -80,7 +81,7 @@ export async function handleModelCallback(ctx: Context, deps: ModelCallbackDepen
       const [, provider, pageRaw] = rest.split(":", 3);
       const callbackMessage = callbackMessageRef(ctx);
       if (callbackMessage) {
-        await deps.editMessageTextFormattedSafe(ctx, callbackMessage.chatId, callbackMessage.messageId, `Choose a model from ${provider}:`, {
+        await deps.editMessageTextFormattedSafe(ctx, callbackMessage.chatId, callbackMessage.messageId, tForUser(config, ctx.from?.id, "choose_model_under_provider", { provider }), {
           reply_markup: buildProviderModelKeyboard(provider || "", models, activeModel, config.telegram.menuPageSize, backLabel, Number(pageRaw || 0)),
         });
       }
@@ -95,7 +96,7 @@ export async function handleModelCallback(ctx: Context, deps: ModelCallbackDepen
 
     const model = rest.slice(4);
     if (!models.includes(model)) {
-      await ctx.answerCallbackQuery({ show_alert: true });
+      await ctx.answerCallbackQuery({ text: tForUser(config, ctx.from?.id, "model_unavailable"), show_alert: true });
       return true;
     }
 
@@ -107,7 +108,7 @@ export async function handleModelCallback(ctx: Context, deps: ModelCallbackDepen
     const callbackMessage = callbackMessageRef(ctx);
     if (callbackMessage) {
       const provider = model.split("/", 1)[0];
-      await deps.editMessageTextFormattedSafe(ctx, callbackMessage.chatId, callbackMessage.messageId, `Choose a model from ${provider}:`, {
+      await deps.editMessageTextFormattedSafe(ctx, callbackMessage.chatId, callbackMessage.messageId, tForUser(config, ctx.from?.id, "choose_model_under_provider", { provider }), {
         reply_markup: buildProviderModelKeyboard(provider, models, state.model || model, config.telegram.menuPageSize, backLabel, 0),
       });
     }

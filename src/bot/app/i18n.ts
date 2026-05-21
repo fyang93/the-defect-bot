@@ -14,6 +14,10 @@ const dictionaries: Record<Locale, Dictionary> = {
     localeTag: "zh-CN",
     strings: {
       choose_model: "请选择模型：",
+      choose_provider: "请选择模型供应商：",
+      choose_model_under_provider: "请选择 {provider} 的模型：",
+      model_unavailable: "模型已不可用",
+      ui_back: "返回",
       new_session: "已创建新会话：{sessionId}",
       command_new: "新建会话",
       command_model: "查看或切换模型",
@@ -24,6 +28,10 @@ const dictionaries: Record<Locale, Dictionary> = {
     localeTag: "en-US",
     strings: {
       choose_model: "Choose a model:",
+      choose_provider: "Choose a model provider:",
+      choose_model_under_provider: "Choose a model from {provider}:",
+      model_unavailable: "Model is unavailable",
+      ui_back: "Back",
       new_session: "Created a new session: {sessionId}",
       command_new: "Create a new session",
       command_model: "View or switch model",

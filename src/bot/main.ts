@@ -156,16 +156,25 @@ const configWatcher = startConfigWatcher(configPath, config, async (_reloadedCon
 await bot.start({
   drop_pending_updates: true,
   onStart: async (botInfo) => {
+    await logger.info("startup phase: sync bot commands");
     await syncBotCommands();
     botUsername = botInfo.username || null;
     botUserId = botInfo.id;
     await logger.info(`bot started as @${botInfo.username}`);
+    await logger.info("startup phase: ensure usable startup model");
     await lifecycle.ensureUsableStartupModel();
+    await logger.info("startup phase: prune inactive schedules");
     const inactiveScheduleCleanup = await scheduleEngine.prune();
     if (inactiveScheduleCleanup.removed > 0) {
       await logger.info(`startup pruned ${inactiveScheduleCleanup.removed} inactive schedules: ${inactiveScheduleCleanup.removedIds.join(", ")}`);
     }
-    await scheduleEngine.prepare();
+    await logger.info("startup phase: schedule prewarm queued in background");
+    void scheduleEngine.prepare().then(async () => {
+      await logger.info("startup phase: schedule prewarm finished");
+    }).catch(async (error) => {
+      await logger.warn(`startup schedule prewarm failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    await logger.info("startup phase: startup greeting queued");
     void lifecycle.sendStartupGreeting();
   },
 });

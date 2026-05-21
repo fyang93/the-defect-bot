@@ -8,7 +8,7 @@ import { createMaintainerRunner } from "bot/runtime";
 import type { ConversationController } from "bot/runtime/conversations/controller";
 import { sendMessageFormatted } from "bot/telegram/format";
 import { buildProviderKeyboard, buildProviderModelKeyboard, providersFromModels, resolveDisplayedModel } from "bot/telegram/model-selection/menu";
-import { userLocale } from "bot/app/i18n";
+import { tForUser, userLocale } from "bot/app/i18n";
 
 export function createBotLifecycle(input: {
   config: AppConfig;
@@ -73,13 +73,13 @@ export function createBotLifecycle(input: {
     const providers = providersFromModels(models);
     const activeProvider = activeModel.split("/", 1)[0] || providers[0];
     if (providers.length === 1 || providers.includes(activeProvider)) {
-      await ctx.reply(`Choose a model from ${activeProvider}:`, {
-        reply_markup: buildProviderModelKeyboard(activeProvider, models, activeModel, config.telegram.menuPageSize, "Back", 0),
+      await ctx.reply(tForUser(config, ctx.from?.id, "choose_model_under_provider", { provider: activeProvider }), {
+        reply_markup: buildProviderModelKeyboard(activeProvider, models, activeModel, config.telegram.menuPageSize, tForUser(config, ctx.from?.id, "ui_back"), 0),
       });
       return;
     }
-    await ctx.reply("Choose a model provider:", {
-      reply_markup: buildProviderKeyboard(models, activeModel, config.telegram.menuPageSize, "Back", 0),
+    await ctx.reply(tForUser(config, ctx.from?.id, "choose_provider"), {
+      reply_markup: buildProviderKeyboard(models, activeModel, config.telegram.menuPageSize, tForUser(config, ctx.from?.id, "ui_back"), 0),
     });
   }
 
