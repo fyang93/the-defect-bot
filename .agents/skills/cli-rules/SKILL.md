@@ -1,39 +1,44 @@
 ---
 name: cli-rules
-description: Manages structured per-user assistant rules through the repository CLI. Use when the task is about adding, replacing, or interpreting durable future-facing rules such as “以后都要…” or “今后请遵守…”.
+description: Load when the task is to add, replace, or interpret durable future-facing per-user assistant rules such as “以后都要…” or “今后请遵守…”, rather than storing an ordinary fact in memory or changing one event.
 ---
 
 # CLI rules
 
-## Quick start
+## Scope
 
-```bash
-bun run repo:cli -- users:get '{"requesterUserId":1,"userId":200}'
-bun run repo:cli -- users:add-rule '{"requesterUserId":1,"userId":200,"rule":"添加组会提醒时默认设置为提前1天、提前2小时、提前1小时"}'
-```
+Use this skill for standing per-user assistant behavior that should apply in future interactions.
 
-## Workflows
+Use neighboring skills instead when the request is mainly about:
 
-### Add or replace rules
+- ordinary facts, notes, or preferences → `memory`
+- one event or reminder instance → `cli-events`
 
+## First action
+
+- Read first when the target user is unclear.
 - Prefer short, reusable, future-facing rule text.
 - Use `users:add-rule` for one new rule.
-- Use `users:set-rules` only for clear full replacement.
-- Read first when the target user is unclear.
+- Use `users:set-rules` only for a clear full replacement.
 
-### Boundaries
+## Gotchas
 
-- Use `memory` for ordinary facts or preferences.
+- Do not turn a one-off request into a durable rule unless the user clearly implies future default behavior.
+- Do not store ordinary biographical facts or preferences here when `memory` is the better fit.
+- Replacement is high impact; avoid `users:set-rules` unless full replacement is explicit.
 - Do not claim success unless the CLI call succeeded.
 
-## Commands
+## Runtime notes
+
+Available commands:
 
 - `users:get`
 - `users:add-rule`
 - `users:set-rules`
 
-## Examples
+Examples:
 
 ```bash
-bun run repo:cli -- users:set-rules '{"requesterUserId":1,"userId":200,"rules":["先查本地记忆再回答","添加组会提醒时默认设置为提前1天、提前2小时、提前1小时"]}'
+bun run repo:cli -- users:get '{"requesterUserId":1,"userId":200}'
+bun run repo:cli -- users:add-rule '{"requesterUserId":1,"userId":200,"rule":"添加组会提醒时默认设置为提前1天、提前2小时、提前1小时"}'
 ```

@@ -3,23 +3,16 @@ import { loadConfig } from "bot/app/config";
 import { DEFAULT_CONFIG_PATH, startConfigWatcher } from "bot/app/config_runtime";
 import { configureLogger, logger } from "bot/app/logger";
 import { AiService } from "bot/ai";
-import { currentModel, loadPersistentState, persistState, state } from "bot/app/state";
+import { currentModel, loadPersistentState, persistState } from "bot/app/state";
 import { pruneExpiredPendingAuthorizationsFromState } from "bot/operations/access/authorizations";
 import { ensureAdminUserAccessLevel } from "bot/operations/access/roles";
-import { handleScheduleCallback, prewarmScheduleDeliveryTexts, pruneInactiveEventRecords, startScheduleLoop } from "bot/operations/events";
-import {
-  buildProviderKeyboard,
-  buildProviderModelKeyboard,
-  providersFromModels,
-  resolveDisplayedModel,
-} from "bot/telegram/model-selection/menu";
-import { tForLocale, tForUser, userLocale, type Locale } from "bot/app/i18n";
-import { replyFormatted, sendMessageFormatted } from "bot/telegram/format";
+import { ScheduleEngine } from "bot/operations/events";
+import { tForLocale, tForUser, type Locale } from "bot/app/i18n";
+import { replyFormatted } from "bot/telegram/format";
 import { accessLevelForUserId, hasUserAccessLevel, isAddressedToBot, isAdminUserId, unauthorizedGuard } from "bot/operations/access/control";
 import { handleModelCallback } from "bot/telegram/model-selection/callback";
 import { ConversationController } from "bot/runtime/conversations/controller";
-import { createMaintainerRunner } from "bot/runtime";
-import { shouldGenerateScheduledTaskOnDelivery, scheduledTaskPromptForEvent } from "bot/operations/events";
+import { createBotLifecycle } from "bot/runtime/boot";
 
 const configPath = DEFAULT_CONFIG_PATH;
 const config = loadConfig(configPath);
@@ -29,6 +22,7 @@ await configureLogger(config.paths.logFile);
 await logger.info(`bot process starting pid=${process.pid}`);
 const bot = new Bot(config.telegram.botToken);
 const agentService = new AiService(config);
+const scheduleEngine = new ScheduleEngine(config, agentService);
 let botUsername: string | null = null;
 let botUserId: number | null = null;
 const pendingAuthorizationCleanup = setInterval(() => {
@@ -48,55 +42,13 @@ const conversationController = new ConversationController({
   isAddressedToBot: (ctx) => isAddressedToBot(ctx, botUsername, botUserId),
 });
 
-async function sendAdminMessage(text: string): Promise<void> {
-  const adminUserId = config.telegram.adminUserId;
-  if (!adminUserId) return;
-  await logger.info(`sending admin message length=${text.trim().length}`);
-  await sendMessageFormatted(bot, adminUserId, text);
-}
-
-async function ensureUsableStartupModel(): Promise<void> {
-  if (!state.model) return;
-  try {
-    const { models } = await agentService.listModels();
-    if (models.includes(state.model)) return;
-    await logger.warn(`configured model ${state.model} is unavailable; falling back to the default OpenCode model`);
-    state.model = null;
-    await persistState(config.paths.stateFile);
-  } catch (error) {
-    await logger.warn(`failed to validate configured model at startup: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-async function sendStartupGreeting(): Promise<void> {
-  try {
-    const adminUserId = config.telegram.adminUserId;
-    if (!adminUserId) {
-      await logger.warn("telegram.admin_user_id is not configured; skipping startup greeting");
-      return;
-    }
-
-    const greeting = await agentService.generateStartupGreeting({ requesterUserId: adminUserId, preferredLanguage: userLocale(config, adminUserId) });
-    if (!greeting) {
-      await logger.warn("startup greeting returned empty output; skipping greet");
-      return;
-    }
-
-    await sendAdminMessage(greeting);
-    await logger.info("Sent startup greeting to admin_user_id only");
-  } catch (error) {
-    await logger.warn(`failed to send startup greeting: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-function createMaintainerRunnerWithNotifications() {
-  return createMaintainerRunner(config, agentService, {
-    isBusy: () => conversationController.hasActiveTask(),
-    onChange: async (summary) => {
-      await sendAdminMessage(summary);
-    },
-  });
-}
+const lifecycle = createBotLifecycle({
+  config,
+  bot,
+  agentService,
+  scheduleEngine,
+  conversationController,
+});
 
 bot.use((ctx, next) => unauthorizedGuard(config, ctx, next));
 
@@ -108,25 +60,12 @@ bot.command("new", async (ctx) => {
 
 bot.command("model", async (ctx) => {
   if (!isAdminUserId(config, ctx.from?.id)) {
-    await replyFormatted(ctx, tForUser(config, ctx.from?.id, "admin_only_command"));
     return;
   }
   try {
-    const { defaults, models } = await agentService.listModels();
-    const activeModel = resolveDisplayedModel(state.model, defaults, currentModel());
-    const providers = providersFromModels(models);
-    const activeProvider = activeModel.split("/", 1)[0] || providers[0];
-    if (providers.length === 1 || providers.includes(activeProvider)) {
-      await replyFormatted(ctx, tForUser(config, ctx.from?.id, "choose_model_under_provider", { provider: activeProvider }), {
-        reply_markup: buildProviderModelKeyboard(activeProvider, models, activeModel, config.telegram.menuPageSize, tForUser(config, ctx.from?.id, "schedule_back"), 0),
-      });
-    } else {
-      await replyFormatted(ctx, tForUser(config, ctx.from?.id, "choose_provider"), {
-        reply_markup: buildProviderKeyboard(models, activeModel, config.telegram.menuPageSize, tForUser(config, ctx.from?.id, "schedule_back"), 0),
-      });
-    }
+    await lifecycle.openModelPicker(ctx);
   } catch (error) {
-    await replyFormatted(ctx, tForUser(config, ctx.from?.id, "fetch_models_failed", { error: error instanceof Error ? error.message : String(error) }));
+    await logger.warn(`failed to fetch model list: ${error instanceof Error ? error.message : String(error)}`);
   }
 });
 
@@ -139,12 +78,8 @@ bot.command("help", async (ctx) => {
 });
 
 bot.on("callback_query:data", async (ctx) => {
-  if (await handleScheduleCallback(config, ctx)) {
-    return;
-  }
-
   if (!hasUserAccessLevel(config, ctx.from?.id, "trusted")) {
-    await ctx.answerCallbackQuery({ text: tForUser(config, ctx.from?.id, "trusted_only_command"), show_alert: true });
+    await ctx.answerCallbackQuery({ show_alert: true });
     return;
   }
 
@@ -175,7 +110,7 @@ bot.catch(async (error) => {
   await logger.error(`unhandled bot error for update ${error.ctx.update.update_id}: ${message}`);
   try {
     if (error.ctx.chat?.id) {
-      await replyFormatted(error.ctx, tForUser(config, error.ctx.from?.id, "task_failed", { error: "internal error" }));
+      await logger.warn("reply to user skipped after unhandled bot error");
     }
   } catch {
     // ignore secondary reply failures
@@ -204,36 +139,17 @@ async function syncBotCommands(): Promise<void> {
 }
 
 await logger.info("bot starting");
-let scheduleLoop = await startScheduleLoop(
-  config,
-  bot,
-  async (event, _instance, fallback) => {
-    if (!shouldGenerateScheduledTaskOnDelivery(event)) return fallback;
-    const prompt = scheduledTaskPromptForEvent(event).trim();
-    if (!prompt) return fallback;
-    const generated = await agentService.generateScheduledTaskContent(prompt);
-    return generated.trim() || fallback;
-  },
-);
-let maintainerRunner = createMaintainerRunnerWithNotifications();
+let scheduleLoop = await lifecycle.startScheduleLoop();
+let maintainerRunner = lifecycle.createMaintainerRunnerWithNotifications();
 const configWatcher = startConfigWatcher(configPath, config, async (_reloadedConfig, result) => {
   configureLogger(config.paths.logFile);
   await ensureAdminUserAccessLevel(config);
   agentService.reloadConfig(config);
   if (maintainerRunner.timer) clearInterval(maintainerRunner.timer);
-  maintainerRunner = createMaintainerRunnerWithNotifications();
+  maintainerRunner = lifecycle.createMaintainerRunnerWithNotifications();
   await syncBotCommands();
   if (config.telegram.adminUserId && (result.reloadedKeys.length > 0 || result.restartRequiredKeys.length > 0)) {
-    const adminUserId = config.telegram.adminUserId;
-    const lines = [tForUser(config, adminUserId, "config_reload_notice")];
-    if (result.reloadedKeys.length > 0) {
-      lines.push(tForUser(config, adminUserId, "config_reload_applied", { keys: result.reloadedKeys.join(", ") }));
-    }
-    if (result.restartRequiredKeys.length > 0) {
-      lines.push(tForUser(config, adminUserId, "config_reload_restart_required", { keys: result.restartRequiredKeys.join(", ") }));
-      lines.push(tForUser(config, adminUserId, "config_reload_restart_hint"));
-    }
-    await sendAdminMessage(lines.join("\n"));
+    await logger.info(`config reloaded applied=${result.reloadedKeys.join(",")} restartRequired=${result.restartRequiredKeys.join(",")}`);
   }
 });
 
@@ -244,13 +160,13 @@ await bot.start({
     botUsername = botInfo.username || null;
     botUserId = botInfo.id;
     await logger.info(`bot started as @${botInfo.username}`);
-    await ensureUsableStartupModel();
-    const inactiveScheduleCleanup = await pruneInactiveEventRecords(config);
+    await lifecycle.ensureUsableStartupModel();
+    const inactiveScheduleCleanup = await scheduleEngine.prune();
     if (inactiveScheduleCleanup.removed > 0) {
       await logger.info(`startup pruned ${inactiveScheduleCleanup.removed} inactive schedules: ${inactiveScheduleCleanup.removedIds.join(", ")}`);
     }
-    await prewarmScheduleDeliveryTexts(config, agentService);
-    void sendStartupGreeting();
+    await scheduleEngine.prepare();
+    void lifecycle.sendStartupGreeting();
   },
 });
 

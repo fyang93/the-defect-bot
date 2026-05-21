@@ -6,6 +6,8 @@ import { ensureAdminUserAccessLevel, resolveStoredUserId } from "bot/operations/
 import { hasUserAccessLevel } from "bot/operations/access/control";
 import { invalidateContextStoreCache } from "bot/operations/context/store";
 import type { AppConfig } from "bot/app/types";
+import { AiService } from "bot/ai";
+import { ScheduleEngine } from "bot/operations/events";
 
 export type CliArgs = Record<string, unknown>;
 
@@ -18,6 +20,7 @@ export class CliOutput extends Error {
 export type RepoCliContext = {
   config: AppConfig;
   args: CliArgs;
+  scheduleEngine: ScheduleEngine;
   output: (value: unknown) => never;
   nowIso: () => string;
   readJson: <T>(relativePath: string, fallback: T) => T;
@@ -108,6 +111,7 @@ export async function initializeRepoCli(args: CliArgs): Promise<RepoCliContext> 
   const config = loadConfig();
   await loadPersistentState(config.paths.stateFile);
   await ensureAdminUserAccessLevel(config);
+  const scheduleEngine = new ScheduleEngine(config, new AiService(config));
 
   const output = (value: unknown): never => {
     throw new CliOutput(value);
@@ -151,6 +155,7 @@ export async function initializeRepoCli(args: CliArgs): Promise<RepoCliContext> 
   return {
     config,
     args,
+    scheduleEngine,
     output,
     nowIso,
     readJson,

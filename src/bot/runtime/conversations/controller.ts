@@ -2,7 +2,7 @@ import type { Bot, Context } from "grammy";
 import type { AppConfig, AiAttachment, UploadedFile } from "bot/app/types";
 import { logger } from "bot/app/logger";
 
-import { editMessageTextFormatted, replyFormatted } from "bot/telegram/format";
+import { editMessageTextFormatted } from "bot/telegram/format";
 import { getAccurateNowIso } from "bot/app/time";
 import {
   clearRecentUploads,
@@ -10,7 +10,6 @@ import {
   getUserTimezone,
   touchActivity,
 } from "bot/app/state";
-import { t } from "bot/app/i18n";
 import { accessLevelForUserId, canUseFiles } from "bot/operations/access/control";
 import { normalizeScheduledAt } from "bot/operations/events";
 import type { AiService } from "bot/ai";
@@ -265,7 +264,6 @@ export class ConversationController {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await logger.error(`text handling failed: ${message}`);
-      await replyFormatted(ctx, t(this.deps.config, "task_failed", { error: message }));
       await this.setReactionSafe(ctx, "😢");
     }
   }
@@ -285,7 +283,6 @@ export class ConversationController {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await logger.error(`contact handling failed: ${message}`);
-      await replyFormatted(ctx, t(this.deps.config, "task_failed", { error: message }));
       await this.setReactionSafe(ctx, "😢");
     }
   }
@@ -299,7 +296,6 @@ export class ConversationController {
     if (!canUseFiles(accessLevel)) {
       await logger.warn(`file upload rejected level=${accessLevel} user=${ctx.from?.id ?? "unknown"}`);
       await this.setReactionSafe(ctx, "😢");
-      await replyFormatted(ctx, t(this.deps.config, "file_upload_not_allowed"));
       return;
     }
 
@@ -342,12 +338,9 @@ export class ConversationController {
       } else {
         await logger.error(`file handling failed: ${message}`);
       }
-      await replyFormatted(
-        ctx,
-        isTelegramBotApiFileLimitError(message)
-          ? t(this.deps.config, "file_processing_too_large_telegram_limit")
-          : t(this.deps.config, "file_processing_failed", { error: message }),
-      );
+      if (isTelegramBotApiFileLimitError(message)) {
+        await logger.warn(`file exceeded telegram bot api limit: ${message}`);
+      }
       await this.setReactionSafe(ctx, "😢");
     }
   }

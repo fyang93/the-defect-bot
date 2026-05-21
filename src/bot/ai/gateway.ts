@@ -17,6 +17,52 @@ type SessionEntry = {
 
 type PromptRole = "assistant" | "maintainer" | "writer";
 
+class SessionBroker {
+  constructor(
+    private readonly create: (scopeKey?: string, scopeLabel?: string) => Promise<SessionEntry>,
+    private readonly abort: (sessionId: string) => Promise<void>,
+  ) {}
+
+  private readonly sessions = new Map<string, SessionEntry>();
+
+  private key(scopeKey?: string): string {
+    return scopeKey?.trim() || "global";
+  }
+
+  async getOrCreate(scopeKey?: string, scopeLabel?: string): Promise<SessionEntry> {
+    const key = this.key(scopeKey);
+    const existing = this.sessions.get(key);
+    if (existing) return existing;
+    const created = await this.create(scopeKey, scopeLabel);
+    this.sessions.set(key, created);
+    return created;
+  }
+
+  async reset(scopeKey?: string, scopeLabel?: string): Promise<SessionEntry> {
+    await this.dispose(scopeKey);
+    const created = await this.create(scopeKey, scopeLabel);
+    this.sessions.set(this.key(scopeKey), created);
+    return created;
+  }
+
+  async dispose(scopeKey?: string): Promise<boolean> {
+    const key = this.key(scopeKey);
+    const entry = this.sessions.get(key);
+    if (!entry) return false;
+    try {
+      await this.abort(entry.sessionId);
+    } finally {
+      this.sessions.delete(key);
+    }
+    return true;
+  }
+
+  async disposeAll(): Promise<void> {
+    const keys = [...this.sessions.keys()];
+    await Promise.all(keys.map((key) => this.dispose(key)));
+  }
+}
+
 function parseModel(model: string | null): { providerID: string; modelID: string } | null {
   if (!model) return null;
   const index = model.indexOf("/");
@@ -66,13 +112,17 @@ function ensureNoToolExecution(role: PromptRole | undefined, parts: unknown): vo
 export class AiService {
   private config: AppConfig;
   private client: any;
-  private readonly sessions = new Map<string, SessionEntry>();
+  private readonly sessions: SessionBroker;
   private readonly replyComposer: ReplyComposer;
   private readonly structuredReasoner: StructuredReasoner;
 
   constructor(config: AppConfig) {
     this.config = config;
     this.client = this.createClient(config);
+    this.sessions = new SessionBroker(
+      (scopeKey, scopeLabel) => this.createSession(scopeKey, scopeLabel),
+      async (sessionId) => { await this.client.session.abort({ path: { id: sessionId } }).catch(() => {}); },
+    );
     this.replyComposer = new ReplyComposer(
       config,
       (text) => this.promptInLightTextSession(text, "writer"),
@@ -112,10 +162,6 @@ export class AiService {
     }
   }
 
-  private sessionKey(scopeKey?: string): string {
-    return scopeKey?.trim() || "global";
-  }
-
   private async createSession(scopeKey?: string, scopeLabel?: string): Promise<SessionEntry> {
     const startedAt = Date.now();
     await this.ensureReady();
@@ -131,30 +177,15 @@ export class AiService {
   }
 
   private async getOrCreateSession(scopeKey?: string, scopeLabel?: string): Promise<SessionEntry> {
-    const key = this.sessionKey(scopeKey);
-    const existing = this.sessions.get(key);
-    if (existing) return existing;
-    const created = await this.createSession(scopeKey, scopeLabel);
-    this.sessions.set(key, created);
-    return created;
+    return this.sessions.getOrCreate(scopeKey, scopeLabel);
   }
 
   private async disposeSession(scopeKey?: string): Promise<boolean> {
-    const key = this.sessionKey(scopeKey);
-    const entry = this.sessions.get(key);
-    if (!entry) return false;
-    try {
-      await this.client.session.abort({ path: { id: entry.sessionId } }).catch(() => {});
-    } finally {
-      this.sessions.delete(key);
-    }
-    return true;
+    return this.sessions.dispose(scopeKey);
   }
 
   async newSession(scopeKey?: string, scopeLabel?: string): Promise<string> {
-    await this.disposeSession(scopeKey);
-    const entry = await this.createSession(scopeKey, scopeLabel);
-    this.sessions.set(this.sessionKey(scopeKey), entry);
+    const entry = await this.sessions.reset(scopeKey, scopeLabel);
     touchActivity();
     return entry.sessionId;
   }
@@ -305,10 +336,7 @@ export class AiService {
   }
 
   stop(): void {
-    for (const entry of this.sessions.values()) {
-      void this.client.session.abort({ path: { id: entry.sessionId } }).catch(() => {});
-    }
-    this.sessions.clear();
+    void this.sessions.disposeAll();
   }
 
   private buildParts(text: string, attachments: AiAttachment[]): Array<{ type: "text"; text: string } | { type: "file"; mime: string; filename?: string; url: string }> {

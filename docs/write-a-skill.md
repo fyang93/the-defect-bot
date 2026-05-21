@@ -1,117 +1,167 @@
 ---
 name: write-a-skill
-description: Create new agent skills with proper structure, progressive disclosure, and bundled resources. Use when user wants to create, write, or build a new skill.
+description: Load when creating, rewriting, reviewing, or restructuring an agent skill or skill library. Covers routing descriptions, progressive loading, gotchas, eval-first design, and when to move deterministic logic into scripts or accessory files.
 ---
 
 # Writing Skills
 
-## Process
+Follow a skill philosophy closer to Perplexity's Agent Skills than to ordinary README writing: skills are context packages, every token is a tax, and the main job is to improve routing and behavior without hurting adjacent skills.
 
-1. **Gather requirements** - ask user about:
-   - What task/domain does the skill cover?
-   - What specific use cases should it handle?
-   - Does it need executable scripts or just instructions?
-   - Any reference materials to include?
+## Core ideas
 
-2. **Draft the skill** - create:
-   - SKILL.md with concise instructions
-   - Additional reference files if content exceeds 500 lines
-   - Utility scripts if deterministic operations needed
+- A skill is a directory, not just one markdown file.
+- The description is a routing trigger, not internal documentation.
+- Keep `SKILL.md` lean; move heavy, conditional, or deterministic content into accessory files.
+- Focus on what the model gets wrong without the skill.
+- Prefer gotchas and negative examples over obvious step-by-step commands.
+- Write or at least define eval cases before polishing the body.
 
-3. **Review with user** - present draft and ask:
-   - Does this cover your use cases?
-   - Anything missing or unclear?
-   - Should any section be more/less detailed?
+## When a skill is justified
 
-## Skill Structure
+Create or keep a skill only when at least one of these is true:
+
+- The agent is consistently wrong without special context.
+- The domain needs durable local knowledge not reliably present in model training.
+- You need stable behavior across runs, not just a one-off prompt nudge.
+- There is deterministic logic or output shaping better implemented as code or templates.
+
+Usually do **not** create a skill for:
+
+- generic tool usage the model already knows
+- restating system-prompt instructions
+- fast-changing external APIs or tool inventories that will drift quickly
+- long human-oriented documentation with little new signal
+
+Test every sentence with: **Would the agent get this wrong without this line?** If not, cut it.
+
+## Recommended process
+
+1. **Write evals first**
+   - Include positive loads, negative loads, and neighbor-confusion cases.
+   - Capture known failures that motivated the skill.
+   - If changing a description later, update routing evals too.
+
+2. **Write the description**
+   - Start with `Load when...`
+   - Target about 50 words or fewer.
+   - Describe user intent and trigger language, ideally from real requests.
+   - Do not summarize the workflow.
+
+3. **Write the body**
+   - Keep it short and high-signal.
+   - Skip obvious commands the model already knows.
+   - Prefer flexible intent-level guidance over brittle command sequences.
+   - Add gotchas, edge cases, and boundaries with neighboring skills.
+
+4. **Use hierarchy deliberately**
+   - Put deterministic code in `scripts/`.
+   - Put heavy docs in `references/` or focused notes under the skill.
+   - Put templates, schemas, and examples in `assets/`.
+   - Keep `SKILL.md` as the hub that points to conditional detail.
+
+5. **Iterate and ship**
+   - Tune routing before expanding body text.
+   - Favor append-mostly gotcha updates over broad rewrites.
+
+## Skill structure
 
 ```text
 skill-name/
-├── SKILL.md           # Main instructions (required)
-├── REFERENCE.md       # Detailed docs (if needed)
-├── EXAMPLES.md        # Usage examples (if needed)
-└── scripts/           # Utility scripts (if needed)
-    └── helper.js
+├── SKILL.md
+├── scripts/        # deterministic logic the agent should run, not reinvent
+├── references/     # heavy docs read only when needed
+├── assets/         # templates, schemas, examples
+└── ...             # narrowly scoped helper notes or subdirectories
 ```
 
-## SKILL.md Template
+Use deeper hierarchy only when it helps the model choose among large conditional branches.
+
+## SKILL.md template
 
 ```md
 ---
 name: skill-name
-description: Brief description of capability. Use when [specific triggers].
+description: Load when [user intent, trigger language, boundary].
 ---
 
-# Skill Name
+# Skill name
 
-## Quick start
+## Scope
 
-[Minimal working example]
+- What this skill is for
+- What nearby tasks belong elsewhere
 
-## Workflows
+## Quick route or first action
 
-[Step-by-step processes with checklists for complex tasks]
+- Minimal first step
+- Link to conditional detail only when needed
 
-## Advanced features
+## Gotchas
 
-[Link to separate files: See [REFERENCE.md](REFERENCE.md)]
+- High-value failure cases
+- Things not to do
+
+## Runtime notes
+
+- Read `references/...` when [condition]
+- Run `scripts/...` when deterministic work is needed
 ```
 
-## Description Requirements
+## Description guidance
 
-The description is **the only thing your agent sees** when deciding which skill to load. It's surfaced in the system prompt alongside all other installed skills. Your agent reads these descriptions and picks the relevant skill based on the user's request.
+A good description helps routing with minimal spillover.
 
-**Goal**: Give your agent just enough info to know:
+Checklist:
 
-1. What capability this skill provides
-2. When/why to trigger it (specific keywords, contexts, file types)
+- Starts with `Load when...`
+- Mentions user intent, not implementation detail
+- Includes adjacent boundaries when confusion is likely
+- Dense and terse; every word must earn its cost
 
-**Format**:
-
-- Max 1024 chars
-- Write in third person
-- First sentence: what it does
-- Second sentence: "Use when [specific triggers]"
-
-**Good example**:
+Good:
 
 ```text
-Extract text and tables from PDF files, fill forms, merge documents. Use when working with PDF files or when user mentions PDFs, forms, or document extraction.
+Load when the task is to add, replace, or interpret durable future-facing assistant rules such as “以后都要…” or “今后请遵守…”, rather than storing ordinary facts or changing one event.
 ```
 
-**Bad example**:
+Bad:
 
 ```text
-Helps with documents.
+This skill manages rules through the CLI and supports adding and replacing them.
 ```
 
-The bad example gives your agent no way to distinguish this from other document skills.
+The bad version explains capability but gives weak routing triggers.
 
-## When to Add Scripts
+## What belongs outside SKILL.md
 
-Add utility scripts when:
+Move content out of the body when it is:
 
-- Operation is deterministic (validation, formatting)
-- Same code would be generated repeatedly
-- Errors need explicit handling
+- deterministic code the agent would otherwise regenerate
+- long reference material needed only after a condition is met
+- output templates or schemas to copy/fill
+- specialized branch logic for one narrow workflow
 
-Scripts save tokens and improve reliability vs generated code.
+Example patterns:
 
-## When to Split Files
+- `scripts/fill_research_worklog.py`
+- `references/api-errors.md`
+- `assets/report-template.md`
+- `tools/<workflow>.md` for a focused local helper note
 
-Split into separate files when:
+## Maintenance guidance
 
-- SKILL.md exceeds 100 lines
-- Content has distinct domains (finance vs sales schemas)
-- Advanced features are rarely needed
+- Skills are append-mostly.
+- Grow the gotchas section from real failures.
+- Tighten descriptions only with routing eval support.
+- Re-check neighboring skill boundaries whenever adding a new skill or changing routing text.
+- Prefer small wording changes with evidence over large untested rewrites.
 
-## Review Checklist
+## Review checklist
 
-After drafting, verify:
-
-- [ ] Description includes triggers ("Use when...")
-- [ ] SKILL.md under 100 lines
-- [ ] No time-sensitive info
-- [ ] Consistent terminology
-- [ ] Concrete examples included
-- [ ] References one level deep
+- [ ] The description is a routing trigger, not a summary
+- [ ] Positive and negative load cases exist
+- [ ] `SKILL.md` contains only high-signal guidance
+- [ ] Obvious command sequences were removed
+- [ ] Deterministic logic moved to scripts/templates where appropriate
+- [ ] Boundaries with neighboring skills are explicit
+- [ ] Gotchas capture known failure modes

@@ -1,7 +1,7 @@
 import type { Bot, Context } from "grammy";
 import type { AppConfig } from "bot/app/types";
 import { logger } from "bot/app/logger";
-import { tForLocale, userLocale, type Locale } from "bot/app/i18n";
+import { userLocale, type Locale } from "bot/app/i18n";
 import { getAccurateNow } from "bot/app/time";
 import { sendMessageFormatted } from "bot/telegram/format";
 import { listAuthorizedUserIds } from "bot/operations/access/roles";
@@ -10,16 +10,8 @@ import { isPreparedScheduleDeliveryTextUsable } from "./preparation";
 import { allRemindersSent, getCurrentOccurrence, listReminderInstances } from "./schedule";
 import { readEventRecords, writeEventRecords } from "./store";
 
-function fallbackDeliveryMessage(_config: AppConfig, event: EventRecord, instance: ReminderInstance, locale: Locale): string {
-  let label = event.title;
-  if (instance.label) {
-    label = `${event.title}（${instance.label}）`;
-  } else if (instance.offsetMinutes < 0) {
-    label = `${event.title}（提前${Math.abs(instance.offsetMinutes)}分钟）`;
-  } else if (instance.offsetMinutes > 0) {
-    label = `${event.title}（${instance.offsetMinutes}分钟后）`;
-  }
-  return tForLocale(locale, "schedule_delivery", { text: label });
+function fallbackDeliveryMessage(_config: AppConfig, event: EventRecord, _instance: ReminderInstance, _locale: Locale): string {
+  return event.title.trim();
 }
 
 function markReminderSent(event: EventRecord, reminderId: string): void {

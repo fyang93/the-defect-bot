@@ -2,7 +2,6 @@ import type { Context } from "grammy";
 import type { AppConfig, AiAttachment, UploadedFile } from "bot/app/types";
 import type { AiService } from "bot/ai";
 import { logger } from "bot/app/logger";
-import { tForUser } from "bot/app/i18n";
 import { executeAssistantActions, type ExecuteAssistantActionsInput } from "./assistant-actions";
 import { buildTelegramRequestContext } from "bot/telegram/identity";
 import { buildAssistantContextBlock, lookupRequesterTimezone } from "bot/operations/context/assistant";
@@ -142,7 +141,6 @@ export async function runAssistantTask(deps: RunAssistantTaskDeps): Promise<void
     await logger.warn(`assistant task ${task.id} failed message=${message}`);
     if (isTaskCurrent(task.scopeKey, task.id) && !task.cancelled) {
       await onSetReaction(ctx, "⚠️");
-      await ctx.reply(tForUser(config, ctx.from?.id, "task_failed", { error: message })).catch(() => {});
     }
   } finally {
     onReleaseActiveTask(task.scopeKey, task.id);

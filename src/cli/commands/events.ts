@@ -7,7 +7,6 @@ import { getCurrentOccurrence, listReminderInstances, resolveScheduleDisplayTime
 import { buildEventScheduleFromExternal } from "bot/operations/events/schedule_parser";
 import { createEventRecordWithDefaults, readEventRecords } from "bot/operations/events/store";
 import type { Reminder } from "bot/operations/events/types";
-import { runEventTask } from "bot/operations/events/task-actions";
 import type { RepoCliContext } from "cli/runtime";
 
 function requesterTimezoneForCli(context: RepoCliContext): string | undefined {
@@ -217,7 +216,7 @@ export async function handleEventMutation(context: RepoCliContext, operation: "u
   const payload = operation === "update"
     ? { match, changes }
     : { match };
-  const result = await runEventTask(context.config, {
+  const result = await context.scheduleEngine.applyTask({
     id: `tool_${Date.now().toString(36)}`,
     state: "queued",
     domain: "events",

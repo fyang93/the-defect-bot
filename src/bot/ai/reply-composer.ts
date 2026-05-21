@@ -32,9 +32,14 @@ export class ReplyComposer {
   async generateReminderText(reminderText: string, notifyAt: string, recurrenceDescription: string, timezone: string): Promise<string> {
     const localReminderTime = formatIsoInTimezoneParts(notifyAt, timezone?.trim());
     const request = this.buildUserFacingTextRequest([
-      "Write a short, clear reminder message.",
+      "Write one short natural reminder message for the recipient.",
+      "Assume the message is delivered at the scheduled reminder time, not at generation time.",
+      "Anchor any time wording to the scheduled delivery time below.",
+      "Do not refer to the generation moment, current moment, or current date.",
+      "Avoid brittle relative phrasing such as ‘tomorrow’, ‘later today’, or ‘next week’ unless it is unambiguously correct at the scheduled delivery time.",
+      "Prefer wording that remains correct even if the text was generated in advance.",
       `Reminder content: ${reminderText}`,
-      localReminderTime ? `Reminder local time: ${localReminderTime.localDateTime} (${localReminderTime.timezone}).` : `Reminder time: ${notifyAt}`,
+      localReminderTime ? `Scheduled delivery local time: ${localReminderTime.localDateTime} (${localReminderTime.timezone}).` : `Scheduled delivery time: ${notifyAt}`,
       `Repeat rule: ${recurrenceDescription}`,
     ], { preferredLanguage: this.config.bot.language });
 

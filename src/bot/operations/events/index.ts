@@ -10,7 +10,6 @@ export type {
   EventStore,
   EventTarget,
   EventTimeSemantics,
-  EventView,
 } from "./types";
 
 export {
@@ -36,6 +35,8 @@ export {
   shouldPrepareScheduleDeliveryText,
 } from "./preparation";
 
+export { ScheduleEngine, type ScheduleEngineDeliverHooks } from "./engine";
+
 export {
   buildDefaultReminders,
   buildEventRecord,
@@ -57,5 +58,4 @@ export {
   startScheduleLoop,
 } from "./delivery";
 
-export { handleScheduleCallback } from "./ui";
-export { resolveEventsByMatch, eventMatchesFilters } from "./task-actions";
+export { resolveEventsByMatch, eventMatchesFilters, type TaskRecord } from "./task-actions";

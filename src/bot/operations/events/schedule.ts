@@ -2,7 +2,7 @@ import solarLunar from "solarlunar";
 import { getUserTimezone } from "bot/app/state";
 import { loadConfig } from "bot/app/config";
 import type { AppConfig } from "bot/app/types";
-import { t, tForLocale, uiLocaleTag, type Locale } from "bot/app/i18n";
+import { uiLocaleTag, type Locale } from "bot/app/i18n";
 import type {
   EventRecord,
   ReminderInstance,
@@ -618,63 +618,37 @@ function scheduleTimeLabel(schedule: EventSchedule, timezone?: string): string {
   return `${String(time.hour).padStart(2, "0")}:${String(time.minute).padStart(2, "0")}`;
 }
 
-export function scheduleEventScheduleSummary(config: AppConfig, event: EventRecord, locale?: Locale): string {
-  const translate = (key: string, values: Record<string, string | number> = {}) => locale ? tForLocale(locale, key, values) : t(config, key, values);
+export function scheduleEventScheduleSummary(config: AppConfig, event: EventRecord, _locale?: Locale): string {
   const schedule = event.schedule;
   const displayTimezone = resolveScheduleDisplayTimezone(config, event);
   if (schedule.kind === "once") {
     return formatDisplayDateTime(config, schedule.scheduledAt, displayTimezone);
   }
   if (schedule.kind === "interval") {
-    if (schedule.unit === "day" && schedule.every === 1) return translate("schedule_created_daily", { time: scheduleTimeLabel(schedule, displayTimezone) });
-    return translate("schedule_created_interval", { every: schedule.every, unit: translate(`schedule_unit_${schedule.unit}`), time: scheduleTimeLabel(schedule, displayTimezone) });
+    return `interval/${schedule.unit}/${schedule.every} @ ${scheduleTimeLabel(schedule, displayTimezone)}`;
   }
   if (schedule.kind === "weekly") {
-    if (schedule.every === 1 && schedule.daysOfWeek.join(",") === "1,2,3,4,5") return translate("schedule_created_weekdays", { time: scheduleTimeLabel(schedule, displayTimezone) });
-    if (schedule.every === 1 && schedule.daysOfWeek.join(",") === "0,6") return translate("schedule_created_weekends", { time: scheduleTimeLabel(schedule, displayTimezone) });
-    return translate("schedule_created_weekly", {
-      every: schedule.every,
-      days: schedule.daysOfWeek.map((day) => translate(`weekday_short_${day}`)).join(", "),
-      time: scheduleTimeLabel(schedule, displayTimezone),
-    });
+    return `weekly/${schedule.every} [${schedule.daysOfWeek.join(",")}] @ ${scheduleTimeLabel(schedule, displayTimezone)}`;
   }
   if (schedule.kind === "monthly") {
     if (schedule.mode === "dayOfMonth") {
-      return translate("schedule_created_monthly_day", { every: schedule.every, day: schedule.dayOfMonth, time: scheduleTimeLabel(schedule, displayTimezone) });
+      return `monthly/${schedule.every} day ${schedule.dayOfMonth} @ ${scheduleTimeLabel(schedule, displayTimezone)}`;
     }
-    return translate("schedule_created_monthly_nth_weekday", {
-      every: schedule.every,
-      ordinal: translate(`ordinal_${schedule.weekOfMonth}`),
-      day: translate(`weekday_short_${schedule.dayOfWeek}`),
-      time: scheduleTimeLabel(schedule, displayTimezone),
-    });
+    return `monthly/${schedule.every} week ${schedule.weekOfMonth} day ${schedule.dayOfWeek} @ ${scheduleTimeLabel(schedule, displayTimezone)}`;
   }
   if (schedule.kind === "yearly") {
-    return translate("schedule_created_yearly", {
-      every: schedule.every,
-      month: schedule.month,
-      day: schedule.day,
-      offset: "",
-      time: scheduleTimeLabel(schedule, displayTimezone),
-    }).trim();
+    return `yearly/${schedule.every} ${schedule.month}/${schedule.day} @ ${scheduleTimeLabel(schedule, displayTimezone)}`;
   }
-  return translate("schedule_created_lunar_yearly", {
-    month: lunarMonthLabel(schedule.month, schedule.isLeapMonth),
-    day: lunarDayLabel(schedule.day),
-    leapPolicy: schedule.isLeapMonth ? translate(`schedule_lunar_leap_policy_${effectiveLunarLeapPolicy(schedule)}`) : "",
-    offset: "",
-    time: scheduleTimeLabel(schedule, displayTimezone),
-  }).trim();
+  return `lunar-yearly ${lunarMonthLabel(schedule.month, schedule.isLeapMonth)}${lunarDayLabel(schedule.day)} @ ${scheduleTimeLabel(schedule, displayTimezone)}`;
 }
 
-function reminderLabel(config: AppConfig, instance: ReminderInstance, locale?: Locale): string {
-  const translate = (key: string, values: Record<string, string | number> = {}) => locale ? tForLocale(locale, key, values) : t(config, key, values);
+function reminderLabel(_config: AppConfig, instance: ReminderInstance, _locale?: Locale): string {
   if (instance.label) return instance.label;
-  if (instance.offsetMinutes === 0) return translate("schedule_reminder_now");
+  if (instance.offsetMinutes === 0) return "0m";
   const abs = Math.abs(instance.offsetMinutes);
-  if (abs % 1440 === 0) return translate("schedule_offset_days_before", { days: abs / 1440 });
-  if (abs % 60 === 0) return `${abs / 60}${translate("schedule_unit_hour")}`;
-  return `${abs}${translate("schedule_unit_minute")}`;
+  if (abs % 1440 === 0) return `${abs / 1440}d`;
+  if (abs % 60 === 0) return `${abs / 60}h`;
+  return `${abs}m`;
 }
 
 export function formatEventRecord(config: AppConfig, event: EventRecord, locale?: Locale): string {

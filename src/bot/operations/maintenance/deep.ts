@@ -1,7 +1,7 @@
 import { appendFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AiService } from "bot/ai";
-import { pruneInactiveEventRecords } from "bot/operations/events";
+import { ScheduleEngine } from "bot/operations/events";
 import { readEventRecords, writeEventRecords } from "bot/operations/events/store";
 import type { AppConfig } from "bot/app/types";
 import { logger } from "bot/app/logger";
@@ -327,7 +327,7 @@ async function runMaintainerCycle(
 
   const preChanges: string[] = [];
 
-  const scheduleCleanup = await pruneInactiveEventRecords(config);
+  const scheduleCleanup = await new ScheduleEngine(config, agentService).prune();
   if (scheduleCleanup.removed > 0) {
     await logger.info(`maintainer loop pruned ${scheduleCleanup.removed} inactive schedules`);
     preChanges.push(`Removed ${scheduleCleanup.removed} inactive schedules: ${detailPreview(scheduleCleanup.removedSummaries)}.`);

@@ -1,40 +1,41 @@
 ---
 name: cli-access
-description: Manages repository-stored user access, identity links, and pending authorization state through the repository CLI. Use when the task involves access levels, person-path links, user identity records, or temporary authorization grants.
+description: Load when the task is to inspect or change repository-stored user access, person-path identity links, user identity records, or pending authorization state through the repository CLI, rather than storing facts in memory or setting durable assistant rules.
 ---
 
 # CLI access
 
-## Quick start
+## Scope
 
-```bash
-bun run repo:cli -- users:list '{"requesterUserId":1}'
-bun run repo:cli -- users:get '{"requesterUserId":1,"userId":200}'
-bun run repo:cli -- users:set-access '{"requesterUserId":1,"userId":200,"accessLevel":"trusted"}'
-```
+Use this skill for repository authority and identity-link state:
 
-## Workflows
+- access levels
+- person-path links
+- user identity records
+- pending authorization entries
 
-### Inspect access or identity state
+Use neighboring skills instead when the task is mainly about:
+
+- durable assistant defaults or future-facing rules → `cli-rules`
+- ordinary facts, preferences, or notes → `memory`
+
+## First action
 
 - Use `users:list` for overview questions.
 - Use `users:get` for one explicit user.
-- Read first when the target user is unclear.
+- Read first when the target user is unclear before mutating anything.
 
-### Mutate access or identity links
+## Gotchas
 
-- Use `users:set-access` to grant, reduce, or clear access.
 - Mutate only one explicit target at a time.
 - Use `users:set-person-path` only when both the Telegram user and canonical person entry are explicit.
-- Use `auth:add-pending` for temporary authorization state.
-
-### Boundaries
-
-- Use `cli-rules` for durable assistant rules.
-- Use `memory` for durable facts or preferences.
+- Use `auth:add-pending` for temporary authorization state, not for durable access decisions.
+- Do not treat memory notes as canonical access state.
 - Do not claim success unless the CLI call succeeded.
 
-## Commands
+## Runtime notes
+
+Available commands:
 
 - `users:list`
 - `users:get`
@@ -42,10 +43,10 @@ bun run repo:cli -- users:set-access '{"requesterUserId":1,"userId":200,"accessL
 - `users:set-person-path`
 - `auth:add-pending`
 
-## Examples
+Examples:
 
 ```bash
+bun run repo:cli -- users:get '{"requesterUserId":1,"userId":200}'
 bun run repo:cli -- users:set-access '{"requesterUserId":1,"userId":200,"accessLevel":"clear"}'
 bun run repo:cli -- users:set-person-path '{"requesterUserId":1,"userId":200,"personPath":"memory/people/alice/README.md"}'
-bun run repo:cli -- auth:add-pending '{"requesterUserId":1,"username":"new_user","createdBy":1}'
 ```
