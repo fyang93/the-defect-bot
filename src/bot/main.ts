@@ -6,7 +6,7 @@ import { AiService } from "bot/ai";
 import { currentModel, loadPersistentState, persistState } from "bot/app/state";
 import { pruneExpiredPendingAuthorizationsFromState } from "bot/operations/access/authorizations";
 import { ensureAdminUserAccessLevel } from "bot/operations/access/roles";
-import { ScheduleEngine } from "bot/operations/events";
+import { ScheduleEngine, type ScheduleLoopHandle } from "bot/operations/events";
 import { tForLocale, tForUser, type Locale } from "bot/app/i18n";
 import { replyFormatted } from "bot/telegram/format";
 import { accessLevelForUserId, hasUserAccessLevel, isAddressedToBot, isAdminUserId, unauthorizedGuard } from "bot/operations/access/control";
@@ -139,7 +139,7 @@ async function syncBotCommands(): Promise<void> {
 }
 
 await logger.info("bot starting");
-let scheduleLoop = await lifecycle.startScheduleLoop();
+let scheduleLoop: ScheduleLoopHandle = await lifecycle.startScheduleLoop();
 let maintainerRunner = lifecycle.createMaintainerRunnerWithNotifications();
 const configWatcher = startConfigWatcher(configPath, config, async (_reloadedConfig, result) => {
   configureLogger(config.paths.logFile);
@@ -168,19 +168,13 @@ await bot.start({
     if (inactiveScheduleCleanup.removed > 0) {
       await logger.info(`startup pruned ${inactiveScheduleCleanup.removed} inactive schedules: ${inactiveScheduleCleanup.removedIds.join(", ")}`);
     }
-    await logger.info("startup phase: schedule prewarm queued in background");
-    void scheduleEngine.prepare().then(async () => {
-      await logger.info("startup phase: schedule prewarm finished");
-    }).catch(async (error) => {
-      await logger.warn(`startup schedule prewarm failed: ${error instanceof Error ? error.message : String(error)}`);
-    });
     await logger.info("startup phase: startup greeting queued");
     void lifecycle.sendStartupGreeting();
   },
 });
 
 function shutdown(): void {
-  clearInterval(scheduleLoop);
+  scheduleLoop.stop();
   clearInterval(pendingAuthorizationCleanup);
   configWatcher.close();
   if (maintainerRunner.timer) clearInterval(maintainerRunner.timer);

@@ -36,6 +36,7 @@ export {
 } from "./preparation";
 
 export { ScheduleEngine, type ScheduleEngineDeliverHooks } from "./engine";
+export type { ScheduleLoopHandle } from "./coordinator";
 
 export {
   buildDefaultReminders,
@@ -55,7 +56,9 @@ export {
 
 export {
   deliverDueSchedules,
-  startScheduleLoop,
 } from "./delivery";
+export {
+  startScheduleLoop,
+} from "./coordinator";
 
 export { resolveEventsByMatch, eventMatchesFilters, type TaskRecord } from "./task-actions";

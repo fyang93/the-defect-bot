@@ -62,8 +62,8 @@ describe("gateway execution history", () => {
     expect(result).toBe("明早 8 点提醒你带钱包。");
     expect(capturedBody?.agent).toBeUndefined();
     expect(String(capturedBody?.system || "")).toContain("text-only reply writer");
-    expect(String(capturedBody?.parts?.[0]?.text || "")).toContain("Write a short, clear reminder message.");
-    expect(String(capturedBody?.parts?.[0]?.text || "")).toContain("Reminder local time: 2026-04-12 17:00:00 (Asia/Tokyo).");
+    expect(String(capturedBody?.parts?.[0]?.text || "")).toContain("Write one short natural reminder message for the recipient.");
+    expect(String(capturedBody?.parts?.[0]?.text || "")).toContain("Scheduled message delivery local time: 2026-04-12 17:00:00 (Asia/Tokyo).");
   });
 
   test("automation content generation uses the assistant build lane instead of writer mode", async () => {

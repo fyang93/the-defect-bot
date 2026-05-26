@@ -137,26 +137,3 @@ export async function deliverDueSchedules(
   return sent;
 }
 
-export async function startScheduleLoop(
-  config: AppConfig,
-  bot: Bot<Context>,
-  renderMessage?: (event: EventRecord, instance: ReminderInstance, fallback: string) => Promise<string>,
-  afterDelivery?: (event: EventRecord, instance: ReminderInstance) => Promise<void>,
-): Promise<NodeJS.Timeout> {
-  let running = false;
-  return setInterval(async () => {
-    if (running) {
-      await logger.warn("skipping schedule tick because previous delivery is still running");
-      return;
-    }
-    running = true;
-    try {
-      const sent = await deliverDueSchedules(config, bot, renderMessage, afterDelivery);
-      if (sent > 0) await logger.info(`sent ${sent} schedules`);
-    } catch (error) {
-      await logger.error(`schedule loop failed: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      running = false;
-    }
-  }, 30000);
-}

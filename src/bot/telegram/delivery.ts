@@ -21,6 +21,12 @@ function buildCaptionOptions(caption?: string, plain = false): Record<string, un
   return { caption: markdownToTelegramHtml(caption), parse_mode: "HTML" };
 }
 
+function quoteMultipartFilename(filename: string): string {
+  const trimmed = filename.trim() || "file";
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) return trimmed;
+  return `"${trimmed.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
 async function sendByExtension(
   api: TelegramSendApi,
   recipientId: number,
@@ -37,7 +43,10 @@ async function sendByExtension(
 
 export async function sendTelegramLocalFile(api: TelegramSendApi, recipientId: number, absPath: string, options?: { filename?: string; caption?: string }): Promise<{ messageId?: number }> {
   const ext = path.extname(absPath).toLowerCase();
-  const input = new InputFile(absPath, options?.filename || path.basename(absPath));
+  // grammY currently emits multipart Content-Disposition as `filename=${filename}`.
+  // Quoting the filename keeps characters such as parentheses in the Telegram-side
+  // filename parser instead of letting them be interpreted as header separators.
+  const input = new InputFile(absPath, quoteMultipartFilename(options?.filename || path.basename(absPath)));
   let result: Record<string, unknown> | undefined;
   try {
     result = await sendByExtension(api, recipientId, input, ext, buildCaptionOptions(options?.caption, false));

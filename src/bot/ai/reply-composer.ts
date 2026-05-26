@@ -4,6 +4,7 @@ import { formatIsoInTimezoneParts } from "bot/app/time";
 import { resolveChat, resolveUser } from "bot/operations/context/store";
 import { extractDisplayableText } from "./response";
 import { buildPersonaStyleLines } from "./prompt";
+import type { ReminderTextContext } from "./types";
 
 export type ReplyComposerInputContext = { requesterUserId?: number; chatId?: number; chatType?: string; preferredLanguage?: string };
 
@@ -29,17 +30,24 @@ export class ReplyComposer {
     return message || null;
   }
 
-  async generateReminderText(reminderText: string, notifyAt: string, recurrenceDescription: string, timezone: string): Promise<string> {
+  async generateReminderText(reminderText: string, notifyAt: string, recurrenceDescription: string, timezone: string, context?: ReminderTextContext): Promise<string> {
     const localReminderTime = formatIsoInTimezoneParts(notifyAt, timezone?.trim());
+    const localEventTime = context?.eventScheduledAt ? formatIsoInTimezoneParts(context.eventScheduledAt, timezone?.trim()) : null;
     const request = this.buildUserFacingTextRequest([
       "Write one short natural reminder message for the recipient.",
-      "Assume the message is delivered at the scheduled reminder time, not at generation time.",
-      "Anchor any time wording to the scheduled delivery time below.",
+      "Assume the message is delivered at the scheduled message delivery time, not at generation time.",
+      "Anchor any time wording to the scheduled message delivery time below.",
       "Do not refer to the generation moment, current moment, or current date.",
-      "Avoid brittle relative phrasing such as ‘tomorrow’, ‘later today’, or ‘next week’ unless it is unambiguously correct at the scheduled delivery time.",
+      "Use the event occurrence time to decide whether this is an advance reminder or a same-time reminder.",
+      "Avoid brittle relative phrasing such as ‘tomorrow’, ‘later today’, or ‘next week’ unless it is unambiguously correct at the scheduled message delivery time.",
       "Prefer wording that remains correct even if the text was generated in advance.",
       `Reminder content: ${reminderText}`,
-      localReminderTime ? `Scheduled delivery local time: ${localReminderTime.localDateTime} (${localReminderTime.timezone}).` : `Scheduled delivery time: ${notifyAt}`,
+      localReminderTime ? `Scheduled message delivery local time: ${localReminderTime.localDateTime} (${localReminderTime.timezone}).` : `Scheduled message delivery time: ${notifyAt}`,
+      localEventTime ? `Event occurrence local time: ${localEventTime.localDateTime} (${localEventTime.timezone}).` : "",
+      context?.reminderLabel ? `Reminder instance label: ${context.reminderLabel}.` : "",
+      typeof context?.reminderOffsetMinutes === "number" ? `Reminder offset minutes from event occurrence: ${context.reminderOffsetMinutes}.` : "",
+      context?.specialKind ? `Special reminder kind: ${context.specialKind}.` : "",
+      context?.category ? `Event category: ${context.category}.` : "",
       `Repeat rule: ${recurrenceDescription}`,
     ], { preferredLanguage: this.config.bot.language });
 

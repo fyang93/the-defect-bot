@@ -5,6 +5,7 @@ import path from "node:path";
 import type { AppConfig } from "../src/bot/app/types";
 import { extractCandidateFilePaths } from "../src/bot/telegram/transport";
 import { deliverAiOutputs } from "../src/bot/runtime/conversations/output";
+import { sendTelegramLocalFile } from "../src/bot/telegram/delivery";
 
 function createTestConfig(repoRoot: string): AppConfig {
   return {
@@ -86,6 +87,31 @@ describe("telegram current-turn output", () => {
 
       expect(calls).not.toContain("sendPhoto:42");
       expect(calls.some((entry) => entry.startsWith("reply:"))).toBe(false);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("sendTelegramLocalFile quotes multipart filenames so Telegram preserves parentheses", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "defect-bot-output-test-filename-"));
+    try {
+      const filePath = path.join(repoRoot, "YANG_FAN_研究業務日誌（2026.5）.xlsx");
+      await writeFile(filePath, "fake-xlsx", "utf8");
+      let seenFilename = "";
+      const api = {
+        sendPhoto: async () => ({ message_id: 1 }),
+        sendVoice: async () => ({ message_id: 1 }),
+        sendVideo: async () => ({ message_id: 1 }),
+        sendAudio: async () => ({ message_id: 1 }),
+        sendDocument: async (_chatId: number, document: any) => {
+          seenFilename = String(document.filename || "");
+          return { message_id: 1 };
+        },
+      };
+
+      await sendTelegramLocalFile(api, 42, filePath, { filename: path.basename(filePath) });
+
+      expect(seenFilename).toBe('"YANG_FAN_研究業務日誌（2026.5）.xlsx"');
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }

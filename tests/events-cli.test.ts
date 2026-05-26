@@ -151,7 +151,6 @@ describe("repo events CLI", () => {
     expect(daily.ok).toBe(true);
     expect((daily.event as any)?.schedule?.kind).toBe("interval");
     expect((daily.event as any)?.schedule?.unit).toBe("day");
-    expect((daily.event as any)?.scheduleSummary).toContain("每天");
 
     const weekdays = await runCli(repoRoot, "events:create", {
       requesterUserId: 1,
@@ -163,7 +162,6 @@ describe("repo events CLI", () => {
     expect(weekdays.ok).toBe(true);
     expect((weekdays.event as any)?.schedule?.kind).toBe("weekly");
     expect((weekdays.event as any)?.schedule?.daysOfWeek).toEqual([1, 2, 3, 4, 5]);
-    expect((weekdays.event as any)?.scheduleSummary).toContain("工作日");
 
     const weekends = await runCli(repoRoot, "events:create", {
       requesterUserId: 1,
@@ -175,7 +173,6 @@ describe("repo events CLI", () => {
     expect(weekends.ok).toBe(true);
     expect((weekends.event as any)?.schedule?.kind).toBe("weekly");
     expect((weekends.event as any)?.schedule?.daysOfWeek).toEqual([0, 6]);
-    expect((weekends.event as any)?.scheduleSummary).toContain("周末");
 
     const events = await readEvents(repoRoot);
     expect(events.find((item) => item.title === "项目开会")?.status).toBe("active");

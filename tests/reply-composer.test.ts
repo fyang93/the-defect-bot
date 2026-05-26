@@ -41,12 +41,22 @@ describe("reply composer sanitization", () => {
       captured = prompt;
       return "18:00，记得 review 论文。";
     });
-    await composer.generateReminderText("review论文", "2026-04-05T18:00:00.000Z", "一次性提醒", "Asia/Tokyo");
+    await composer.generateReminderText("review论文", "2026-04-05T18:00:00.000Z", "一次性提醒", "Asia/Tokyo", {
+      eventScheduledAt: "2026-04-06T18:00:00.000Z",
+      reminderLabel: "提前1天",
+      reminderOffsetMinutes: -1440,
+      specialKind: "birthday",
+      category: "special",
+    });
     expect(captured).toContain("Reply style: 冷静、简洁、稳定");
     expect(captured).toContain("Reply in that style.");
     expect(captured).not.toContain("If you mention a time, include the timezone.");
-    expect(captured).toContain("Write a short, clear reminder message.");
-    expect(captured).toContain("Reminder local time: 2026-04-06 03:00:00 (Asia/Tokyo).");
+    expect(captured).toContain("Write one short natural reminder message for the recipient.");
+    expect(captured).toContain("Scheduled message delivery local time: 2026-04-06 03:00:00 (Asia/Tokyo).");
+    expect(captured).toContain("Event occurrence local time: 2026-04-07 03:00:00 (Asia/Tokyo).");
+    expect(captured).toContain("Reminder instance label: 提前1天.");
+    expect(captured).toContain("Reminder offset minutes from event occurrence: -1440.");
+    expect(captured).toContain("Special reminder kind: birthday.");
   });
 
   test("startup greeting request keeps persona enabled", async () => {

@@ -35,6 +35,9 @@ export class StructuredReasoner {
       requesterTimezone,
     );
     await logger.info(`ai prompt request attachments=${JSON.stringify(this.summarizeAttachments(attachments))}`);
-    return await this.executePrompt(promptText, attachments, scopeKey);
+    if (attachments.length > 0) {
+      await logger.warn(`deferred ${attachments.length} native attachment(s) for assistant prompt; saved file paths remain available for tool-based handling`);
+    }
+    return await this.executePrompt(promptText, [], scopeKey);
   }
 }

@@ -5,7 +5,7 @@ import { formatIsoInTimezoneParts } from "bot/app/time";
 import { state, touchActivity } from "bot/app/state";
 import { buildAccessConstraintLines, buildProjectSystemPrompt, type RequestAccessRole } from "./prompt";
 import { extractAiTurnResultFromText, isDisplayableUserText } from "./response";
-import type { AiTurnResult, AssistantPlanResult, AssistantProgressHandler } from "./types";
+import type { AiTurnResult, AssistantPlanResult, AssistantProgressHandler, ReminderTextContext } from "./types";
 import { ReplyComposer, type ReplyComposerInputContext } from "./reply-composer";
 import { StructuredReasoner } from "./structured-reasoner";
 
@@ -16,6 +16,14 @@ type SessionEntry = {
 };
 
 type PromptRole = "assistant" | "maintainer" | "writer";
+
+type AttachmentCapabilityCache = {
+  modelKey: string;
+  supportsAttachments: boolean;
+  checkedAt: number;
+};
+
+const MODEL_CAPABILITY_CACHE_MS = 60_000;
 
 class SessionBroker {
   constructor(
@@ -115,6 +123,7 @@ export class AiService {
   private readonly sessions: SessionBroker;
   private readonly replyComposer: ReplyComposer;
   private readonly structuredReasoner: StructuredReasoner;
+  private attachmentCapabilityCache: AttachmentCapabilityCache | null = null;
 
   constructor(config: AppConfig) {
     this.config = config;
@@ -210,6 +219,39 @@ export class AiService {
     };
   }
 
+  private async selectedModelSupportsAttachments(): Promise<boolean> {
+    const parsed = parseModel(state.model);
+    if (!parsed) return true;
+
+    const modelKey = `${parsed.providerID}/${parsed.modelID}`;
+    const now = Date.now();
+    if (this.attachmentCapabilityCache?.modelKey === modelKey && now - this.attachmentCapabilityCache.checkedAt < MODEL_CAPABILITY_CACHE_MS) {
+      return this.attachmentCapabilityCache.supportsAttachments;
+    }
+
+    try {
+      await this.ensureReady();
+      const response = await this.client.config.providers() as any;
+      const data = response.data ?? response;
+      const providers = Array.isArray(data.providers) ? data.providers : [];
+      const provider = providers.find((item: any) => item?.id === parsed.providerID);
+      const model = provider?.models && typeof provider.models === "object" ? provider.models[parsed.modelID] : undefined;
+      const supportsAttachments = model?.capabilities?.attachment !== false;
+      this.attachmentCapabilityCache = { modelKey, supportsAttachments, checkedAt: now };
+      return supportsAttachments;
+    } catch (error) {
+      await logger.warn(`failed to inspect model attachment capability model=${JSON.stringify(modelKey)} message=${error instanceof Error ? error.message : String(error)}`);
+      return true;
+    }
+  }
+
+  private async filterAttachmentsForSelectedModel(attachments: AiAttachment[], context: string): Promise<AiAttachment[]> {
+    if (attachments.length === 0) return attachments;
+    if (await this.selectedModelSupportsAttachments()) return attachments;
+    await logger.warn(`dropped ${attachments.length} attachment(s) before ${context} because selected model ${JSON.stringify(state.model)} does not support attachments`);
+    return [];
+  }
+
   async prompt(
     text: string,
     uploadedFiles: UploadedFile[] = [],
@@ -228,8 +270,8 @@ export class AiService {
     return this.replyComposer.generateStartupGreeting(input);
   }
 
-  async generateReminderText(reminderText: string, notifyAt: string, recurrenceDescription: string, timezone: string): Promise<string> {
-    return this.replyComposer.generateReminderText(reminderText, notifyAt, recurrenceDescription, timezone);
+  async generateReminderText(reminderText: string, notifyAt: string, recurrenceDescription: string, timezone: string, context?: ReminderTextContext): Promise<string> {
+    return this.replyComposer.generateReminderText(reminderText, notifyAt, recurrenceDescription, timezone, context);
   }
 
   async generateScheduledTaskContent(prompt: string): Promise<string> {
@@ -268,6 +310,12 @@ export class AiService {
     onProgress?: AssistantProgressHandler;
   }): Promise<AssistantPlanResult> {
     const localMessageTime = formatIsoInTimezoneParts(input.messageTime, input.requesterTimezone?.trim() || this.config.bot.defaultTimezone);
+    const nativeAttachments = input.attachments || [];
+    if (nativeAttachments.length > 0) {
+      await logger.warn(`deferred ${nativeAttachments.length} native attachment(s) for assistant turn; saved file paths remain available for tool-based handling`);
+    }
+    const policyFilteredAttachments: AiAttachment[] = [];
+
     const prompt = [
       "Turn context:",
       `requesterUserId=${input.requesterUserId ?? "unknown"}`,
@@ -299,7 +347,8 @@ export class AiService {
             "Do not write XML, <invoke ...> blocks, or tool-call text.",
             "Use the needed tools, then return the final user-visible reply for this turn in the configured persona.",
           ].join("\n");
-      const response = await this.promptInScopedAssistantSession(attemptPrompt, input.attachments || [], input.scopeKey, input.scopeLabel, input.onProgress);
+      const promptAttachments = await this.filterAttachmentsForSelectedModel(policyFilteredAttachments, "assistant turn");
+      const response = await this.promptInScopedAssistantSession(attemptPrompt, promptAttachments, input.scopeKey, input.scopeLabel, input.onProgress);
       if (input.isTaskCurrent && !input.isTaskCurrent()) {
         await logger.warn("assistant agent response ignored because task became stale");
         return { message: "", usedNativeExecution: false, completedActions: response.completedActions, files: [], attachments: [] };
@@ -466,14 +515,15 @@ export class AiService {
     if (role === "assistant") {
       return (await this.promptSessionForAssistant(sessionId, text, attachments)).rawText;
     }
+    const promptAttachments = await this.filterAttachmentsForSelectedModel(attachments, `${role} text prompt`);
     const startedAt = Date.now();
-    await logger.info(`opencode text prompt start sessionId=${sessionId} model=${JSON.stringify(state.model || "default")} textChars=${text.length} attachments=${attachments.length} mode=full role=${role}`);
+    await logger.info(`opencode text prompt start sessionId=${sessionId} model=${JSON.stringify(state.model || "default")} textChars=${text.length} attachments=${promptAttachments.length} mode=full role=${role}`);
     const response = await this.client.session.prompt({
       path: { id: sessionId },
       body: {
         system: this.systemPromptForRole(role),
         model: parseModel(state.model) || undefined,
-        parts: this.buildParts(text, attachments),
+        parts: this.buildParts(text, promptAttachments),
       },
     }) as any;
     const payload = response.data ?? response;
@@ -488,15 +538,16 @@ export class AiService {
   }
 
   private async promptSessionForAgent(sessionId: string, text: string, attachments: AiAttachment[], role: "assistant"): Promise<{ rawText: string; usedNativeExecution: boolean; completedActions: string[] }> {
+    const promptAttachments = await this.filterAttachmentsForSelectedModel(attachments, `${role} agent prompt`);
     const startedAt = Date.now();
-    await logger.info(`opencode text prompt start sessionId=${sessionId} model=${JSON.stringify(state.model || "default")} textChars=${text.length} attachments=${attachments.length} mode=full role=${role}`);
+    await logger.info(`opencode text prompt start sessionId=${sessionId} model=${JSON.stringify(state.model || "default")} textChars=${text.length} attachments=${promptAttachments.length} mode=full role=${role}`);
     const response = await this.client.session.prompt({
       path: { id: sessionId },
       body: {
         agent: "build",
         system: this.systemPromptForRole(role),
         model: parseModel(state.model) || undefined,
-        parts: this.buildParts(text, attachments),
+        parts: this.buildParts(text, promptAttachments),
       },
     }) as any;
     const payload = response.data ?? response;
@@ -514,15 +565,16 @@ export class AiService {
   }
 
   private async promptSessionForLightText(sessionId: string, text: string, attachments: AiAttachment[], role?: PromptRole): Promise<string> {
+    const promptAttachments = await this.filterAttachmentsForSelectedModel(attachments, `${role || "default"} light prompt`);
     const startedAt = Date.now();
-    await logger.info(`opencode text prompt start sessionId=${sessionId} model=${JSON.stringify(state.model || "default")} textChars=${text.length} attachments=${attachments.length} mode=light${role ? ` role=${role}` : ""}`);
+    await logger.info(`opencode text prompt start sessionId=${sessionId} model=${JSON.stringify(state.model || "default")} textChars=${text.length} attachments=${promptAttachments.length} mode=light${role ? ` role=${role}` : ""}`);
     const response = await this.client.session.prompt({
       path: { id: sessionId },
       body: {
         agent: role === "assistant" ? "build" : undefined,
         system: role ? this.systemPromptForRole(role) : undefined,
         model: parseModel(state.model) || undefined,
-        parts: this.buildParts(text, attachments),
+        parts: this.buildParts(text, promptAttachments),
       },
     }) as any;
     const payload = response.data ?? response;

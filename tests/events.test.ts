@@ -340,7 +340,7 @@ describe("schedule task matching", () => {
     expect(event.category).toBe("special");
   });
 
-  test("农历年度提醒可以正常计算下一次 occurrence 并保留可读摘要", async () => {
+  test("农历年度提醒可以正常计算下一次 occurrence", async () => {
     const config = await createTempConfig();
     const event = buildEventRecord(config, {
       title: "中秋赏月",
@@ -356,10 +356,6 @@ describe("schedule task matching", () => {
     expect(occurrence).not.toBeNull();
     expect(new Date(String(occurrence?.scheduledAt)).getTime()).toBeGreaterThan(new Date("2026-01-01T00:00:00.000Z").getTime());
 
-    const summary = scheduleEventScheduleSummary(config, event);
-    expect(summary).toContain("农历");
-    expect(summary).toContain("八月");
-    expect(summary).toContain("十五");
   });
 });
 

@@ -76,11 +76,19 @@ export async function prepareScheduleDeliveryText(config: AppConfig, agentServic
   if (isPreparedScheduleDeliveryTextUsable(event, nextInstance)) {
     return false;
   }
+  const currentOccurrence = getCurrentOccurrence(event, now);
   const message = await agentService.generateReminderText(
     event.title,
     nextInstance.notifyAt,
     scheduleEventScheduleSummary(config, event),
     resolveScheduleDisplayTimezone(config, event),
+    {
+      eventScheduledAt: currentOccurrence?.scheduledAt,
+      reminderLabel: nextInstance.label,
+      reminderOffsetMinutes: nextInstance.offsetMinutes,
+      specialKind: event.specialKind,
+      category: event.category,
+    },
   );
   const trimmed = message.trim();
   if (!trimmed) return false;

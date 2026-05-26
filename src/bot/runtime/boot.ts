@@ -3,7 +3,7 @@ import type { AppConfig } from "bot/app/types";
 import { logger } from "bot/app/logger";
 import { currentModel, persistState, state } from "bot/app/state";
 import type { AiService } from "bot/ai";
-import { ScheduleEngine, scheduledTaskPromptForEvent, shouldGenerateScheduledTaskOnDelivery } from "bot/operations/events";
+import { ScheduleEngine, resolveScheduleDisplayTimezone, scheduledTaskPromptForEvent, scheduleEventScheduleSummary, shouldGenerateScheduledTaskOnDelivery } from "bot/operations/events";
 import { createMaintainerRunner } from "bot/runtime";
 import type { ConversationController } from "bot/runtime/conversations/controller";
 import { sendMessageFormatted } from "bot/telegram/format";
@@ -85,11 +85,27 @@ export function createBotLifecycle(input: {
 
   async function startScheduleLoop() {
     return scheduleEngine.startLoop(bot as any, {
-      renderMessage: async (event, _instance, fallback) => {
-        if (!shouldGenerateScheduledTaskOnDelivery(event)) return fallback;
-        const prompt = scheduledTaskPromptForEvent(event).trim();
-        if (!prompt) return fallback;
-        const generated = await agentService.generateScheduledTaskContent(prompt);
+      renderMessage: async (event, instance, fallback) => {
+        if (shouldGenerateScheduledTaskOnDelivery(event)) {
+          const prompt = scheduledTaskPromptForEvent(event).trim();
+          if (!prompt) return fallback;
+          const generated = await agentService.generateScheduledTaskContent(prompt);
+          return generated.trim() || fallback;
+        }
+
+        const generated = await agentService.generateReminderText(
+          event.title,
+          instance.notifyAt,
+          scheduleEventScheduleSummary(config, event),
+          resolveScheduleDisplayTimezone(config, event),
+          {
+            eventScheduledAt: event.deliveryState?.currentOccurrence?.scheduledAt,
+            reminderLabel: instance.label,
+            reminderOffsetMinutes: instance.offsetMinutes,
+            specialKind: event.specialKind,
+            category: event.category,
+          },
+        );
         return generated.trim() || fallback;
       },
     });

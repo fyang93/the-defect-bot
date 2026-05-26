@@ -39,4 +39,12 @@ export type AssistantPlanResult = {
   attachments?: AiAttachment[];
 };
 
+export type ReminderTextContext = {
+  eventScheduledAt?: string;
+  reminderLabel?: string;
+  reminderOffsetMinutes?: number;
+  specialKind?: "birthday" | "festival" | "anniversary" | "memorial";
+  category?: "routine" | "special" | "automation";
+};
+
 export type AssistantProgressHandler = (message: string) => Promise<void> | void;
