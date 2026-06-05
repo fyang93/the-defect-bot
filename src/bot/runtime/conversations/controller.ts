@@ -219,6 +219,18 @@ export class ConversationController {
     }
   }
 
+  private async sendWaitingMessageSafe(ctx: Context, text: string): Promise<{ message_id?: number } | null> {
+    try {
+      return await ctx.reply(text);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const chatId = ctx.chat?.id;
+      const sourceMessageId = ctx.message?.message_id;
+      await logger.warn(`waiting message send failed chat=${chatId ?? "unknown"} message=${sourceMessageId ?? "unknown"}: ${message}`);
+      return null;
+    }
+  }
+
   async handleIncomingText(ctx: Context): Promise<void> {
     try {
       const incomingAt = Date.now();
@@ -605,7 +617,7 @@ export class ConversationController {
     await this.setReactionSafe(ctx, "🤔");
     const initialWaitingMessage = this.deps.config.telegram.waitingMessage;
     const waiting = initialWaitingMessage
-      ? await ctx.reply(renderWaitingMessage(slot.input.waitingTemplate, initialWaitingMessage))
+      ? await this.sendWaitingMessageSafe(ctx, renderWaitingMessage(slot.input.waitingTemplate, initialWaitingMessage))
       : null;
 
     const latest = this.turns.get(scopeKey);

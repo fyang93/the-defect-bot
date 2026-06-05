@@ -3,7 +3,7 @@ import type { Context } from "grammy";
 import type { AppConfig, AiAttachment, UploadedFile } from "../src/bot/app/types";
 import { ConversationController } from "../src/bot/runtime/conversations/controller";
 
-function createConfig(): AppConfig {
+function createConfig(overrides: Partial<AppConfig["telegram"]> = {}): AppConfig {
   return {
     telegram: {
       botToken: "test",
@@ -11,6 +11,7 @@ function createConfig(): AppConfig {
       waitingMessage: "",
       inputMergeWindowSeconds: 3,
       menuPageSize: 8,
+      ...overrides,
     },
     bot: {
       personaStyle: "",
@@ -32,9 +33,9 @@ function createConfig(): AppConfig {
   };
 }
 
-function createController() {
+function createController(config = createConfig()) {
   return new ConversationController({
-    config: createConfig(),
+    config,
     bot: {
       api: {
         deleteMessage: async () => {},
@@ -42,6 +43,13 @@ function createController() {
     } as any,
     agentService: {
       abortCurrentSession: async () => {},
+      runAssistantTurn: async () => ({
+        message: "",
+        files: [],
+        attachments: [],
+        completedActions: [],
+        usedNativeExecution: true,
+      }),
     } as any,
     isTrustedUserId: () => true,
     isAdminUserId: () => true,
@@ -399,6 +407,22 @@ describe("conversation controller input merge window", () => {
     expect(restarted).toBe(true);
     expect(controller.turns.get("user:1")?.input.uploadedFiles).toEqual([uploaded]);
     expect(controller.turns.get("user:1")?.input.attachments).toEqual([attachment]);
+  });
+
+  test("continues the assistant turn when the waiting message send fails", async () => {
+    const controller = createController(createConfig({ waitingMessage: "processing", inputMergeWindowSeconds: 0 })) as any;
+    const ctx = {
+      ...createCtx(41),
+      reply: async () => {
+        throw new Error("Network request for 'sendMessage' failed!");
+      },
+      api: {
+        deleteMessage: async () => {},
+      },
+    } as any;
+
+    await expect(controller.beginConversationTurn(ctx, "", "Current user message:\nhi", [], [], "2026-06-05T00:00:00.000Z")).resolves.toBeUndefined();
+    expect(controller.turns.get("user:1")).toBeUndefined();
   });
 
   test("does not merge when active task is cancelled", async () => {
