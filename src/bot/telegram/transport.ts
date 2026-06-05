@@ -46,9 +46,38 @@ function targetPath(targetDir: string, filename: string): { filename: string; fi
   };
 }
 
+const TELEGRAM_FETCH_ATTEMPTS = 3;
+const TELEGRAM_FETCH_RETRY_BASE_MS = 500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableHttpStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
+async function fetchWithRetry(url: string, label: string): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= TELEGRAM_FETCH_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(url);
+      if (response.ok || !isRetryableHttpStatus(response.status) || attempt === TELEGRAM_FETCH_ATTEMPTS) {
+        return response;
+      }
+      lastError = new Error(`${label} failed: ${response.status} ${response.statusText}`);
+    } catch (error) {
+      lastError = error;
+      if (attempt === TELEGRAM_FETCH_ATTEMPTS) break;
+    }
+    await sleep(TELEGRAM_FETCH_RETRY_BASE_MS * attempt);
+  }
+  throw lastError instanceof Error ? lastError : new Error(`${label} failed: ${String(lastError)}`);
+}
+
 async function downloadTelegramFile(botToken: string, filePath: string): Promise<Uint8Array> {
   const url = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
-  const response = await fetch(url);
+  const response = await fetchWithRetry(url, "Telegram file download");
   if (!response.ok) {
     throw new Error(`Telegram file download failed: ${response.status} ${response.statusText}`);
   }
@@ -69,7 +98,7 @@ function parseDataUri(dataUri: string): { mimeType: string; bytes: Uint8Array } 
 }
 
 async function fetchAttachmentBytes(url: string): Promise<{ bytes: Uint8Array; mimeType?: string }> {
-  const response = await fetch(url);
+  const response = await fetchWithRetry(url, "Attachment download");
   if (!response.ok) {
     throw new Error(`Attachment download failed: ${response.status} ${response.statusText}`);
   }
@@ -146,10 +175,25 @@ function extractTelegramFileMetadata(message: unknown): Omit<UploadedFile, "save
   return null;
 }
 
+async function getTelegramFileWithRetry(ctx: Context, fileId: string): Promise<Awaited<ReturnType<Context["api"]["getFile"]>>> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= TELEGRAM_FETCH_ATTEMPTS; attempt += 1) {
+    try {
+      return await ctx.api.getFile(fileId);
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (/file is too big/i.test(message) || attempt === TELEGRAM_FETCH_ATTEMPTS) break;
+      await sleep(TELEGRAM_FETCH_RETRY_BASE_MS * attempt);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`Telegram getFile failed: ${String(lastError)}`);
+}
+
 async function persistTelegramFile(ctx: Context, config: AppConfig, fileMeta: Omit<UploadedFile, "savedPath" | "absolutePath" | "sizeBytes" | "filename"> & { fileId: string }): Promise<UploadedFile> {
   let file;
   try {
-    file = await ctx.api.getFile(fileMeta.fileId);
+    file = await getTelegramFileWithRetry(ctx, fileMeta.fileId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/file is too big/i.test(message)) {

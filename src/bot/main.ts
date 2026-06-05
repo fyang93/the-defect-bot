@@ -20,7 +20,30 @@ await loadPersistentState(config.paths.stateFile);
 await ensureAdminUserAccessLevel(config);
 await configureLogger(config.paths.logFile);
 await logger.info(`bot process starting pid=${process.pid}`);
-const bot = new Bot(config.telegram.botToken);
+const TELEGRAM_API_TIMEOUT_SECONDS = 15;
+const TELEGRAM_POLL_TIMEOUT_SECONDS = 10;
+const configuredBotId = Number(config.telegram.botToken.split(":", 1)[0]);
+const bot = new Bot(config.telegram.botToken, {
+  client: {
+    timeoutSeconds: TELEGRAM_API_TIMEOUT_SECONDS,
+  },
+  // Avoid a blocking getMe call during startup. grammY will otherwise fetch bot
+  // info before onStart, which can make startup appear frozen when Telegram is
+  // slow/unreachable. The bot id is encoded in the token prefix.
+  botInfo: {
+    id: configuredBotId,
+    is_bot: true,
+    first_name: "a_defect_bot",
+    username: "a_defect_bot",
+    can_join_groups: true,
+    can_read_all_group_messages: false,
+    supports_inline_queries: false,
+    can_connect_to_business: false,
+    has_main_web_app: false,
+    has_topics_enabled: false,
+    allows_users_to_create_topics: false,
+  },
+});
 const agentService = new AiService(config);
 const scheduleEngine = new ScheduleEngine(config, agentService);
 let botUsername: string | null = null;
@@ -130,12 +153,47 @@ function buildBotCommands(locale: Locale) {
   }));
 }
 
+const BOT_COMMAND_SYNC_TIMEOUT_MS = 5_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+async function logBotCommandState(reason: string): Promise<void> {
+  try {
+    const commands = await bot.api.getMyCommands();
+    const defaultMenuButton = await bot.api.getChatMenuButton();
+    const adminMenuButton = config.telegram.adminUserId
+      ? await bot.api.getChatMenuButton({ chat_id: config.telegram.adminUserId }).catch((error) => ({ error: error instanceof Error ? error.message : String(error) }))
+      : null;
+    await logger.info(`telegram command state reason=${reason} defaultMenuButton=${JSON.stringify(defaultMenuButton)} adminMenuButton=${JSON.stringify(adminMenuButton)} commands=${JSON.stringify(commands.map((command) => command.command))}`);
+  } catch (error) {
+    await logger.warn(`telegram command state unavailable reason=${reason}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 async function syncBotCommands(): Promise<void> {
-  await Promise.all([
-    bot.api.setMyCommands(buildBotCommands(config.bot.language)),
-    bot.api.setMyCommands(buildBotCommands("zh-CN"), { language_code: "zh" }),
-    bot.api.setMyCommands(buildBotCommands("en"), { language_code: "en" }),
-  ]);
+  await bot.api.setMyCommands(buildBotCommands(config.bot.language));
+  await bot.api.setChatMenuButton({ menu_button: { type: "commands" } });
+  if (config.telegram.adminUserId) {
+    // Clear any admin chat-specific menu button so the default commands menu is used.
+    await bot.api.setChatMenuButton({ chat_id: config.telegram.adminUserId, menu_button: { type: "default" } });
+  }
+  await logBotCommandState("after sync");
+}
+
+async function syncBotCommandsSafe(reason: string): Promise<void> {
+  try {
+    await withTimeout(syncBotCommands(), BOT_COMMAND_SYNC_TIMEOUT_MS, "sync bot commands");
+  } catch (error) {
+    await logger.warn(`sync bot commands skipped reason=${reason}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 await logger.info("bot starting");
@@ -147,17 +205,19 @@ const configWatcher = startConfigWatcher(configPath, config, async (_reloadedCon
   agentService.reloadConfig(config);
   if (maintainerRunner.timer) clearInterval(maintainerRunner.timer);
   maintainerRunner = lifecycle.createMaintainerRunnerWithNotifications();
-  await syncBotCommands();
+  await syncBotCommandsSafe("config reload");
   if (config.telegram.adminUserId && (result.reloadedKeys.length > 0 || result.restartRequiredKeys.length > 0)) {
     await logger.info(`config reloaded applied=${result.reloadedKeys.join(",")} restartRequired=${result.restartRequiredKeys.join(",")}`);
   }
 });
 
+await logger.info("startup phase: start grammY polling");
 await bot.start({
   drop_pending_updates: true,
+  timeout: TELEGRAM_POLL_TIMEOUT_SECONDS,
   onStart: async (botInfo) => {
     await logger.info("startup phase: sync bot commands");
-    await syncBotCommands();
+    await syncBotCommandsSafe("startup");
     botUsername = botInfo.username || null;
     botUserId = botInfo.id;
     await logger.info(`bot started as @${botInfo.username}`);

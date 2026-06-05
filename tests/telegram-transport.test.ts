@@ -100,6 +100,38 @@ describe("telegram file persistence", () => {
     }
   });
 
+  test("retries transient Telegram file download fetch failures", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "defect-bot-transport-"));
+    try {
+      await mkdir(path.join(repoRoot, "tmp"), { recursive: true });
+      const config = createTestConfig(repoRoot);
+      let fetchCount = 0;
+      globalThis.fetch = (async () => {
+        fetchCount += 1;
+        if (fetchCount === 1) throw new Error("fetch failed");
+        return new Response(new Uint8Array([7, 8, 9]), { status: 200 });
+      }) as typeof fetch;
+
+      const uploaded = await saveTelegramFileFromMessage({
+        api: {
+          getFile: async () => ({ file_path: "docs/retry.txt" }),
+        },
+      } as any, config, {
+        document: {
+          file_id: "retry",
+          file_unique_id: "retry-u",
+          file_name: "retry.txt",
+          mime_type: "text/plain",
+        },
+      });
+
+      expect(fetchCount).toBe(2);
+      expect(Array.from(new Uint8Array(await readFile(uploaded!.absolutePath)))).toEqual([7, 8, 9]);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   test("same-name uploads overwrite the previous saved file instead of creating suffixed copies", async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "defect-bot-transport-"));
     try {
