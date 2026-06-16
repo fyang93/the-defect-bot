@@ -23,9 +23,6 @@ export type AppConfig = {
     idleAfterMs: number;
     tmpRetentionDays: number;
   };
-  opencode?: {
-    baseUrl?: string;
-  };
 };
 
 export type UploadedFile = {

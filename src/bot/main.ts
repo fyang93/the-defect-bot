@@ -154,6 +154,7 @@ function buildBotCommands(locale: Locale) {
 }
 
 const BOT_COMMAND_SYNC_TIMEOUT_MS = 5_000;
+const BOT_STARTUP_TELEGRAM_TIMEOUT_MS = 5_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -163,6 +164,25 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   return Promise.race([promise, timeout]).finally(() => {
     if (timer) clearTimeout(timer);
   });
+}
+
+function formatError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+
+  const details: string[] = [error.message];
+  const grammYHttpError = error as Error & { error?: unknown };
+  const wrappedError = grammYHttpError.error;
+  const cause = wrappedError instanceof Error ? wrappedError.cause : undefined;
+  if (cause && typeof cause === "object") {
+    const code = "code" in cause ? String(cause.code) : null;
+    if (code) details.push(`cause=${code}`);
+    const nestedErrors = "errors" in cause && Array.isArray(cause.errors) ? cause.errors : [];
+    const nestedCodes = nestedErrors
+      .map((nested) => (nested && typeof nested === "object" && "code" in nested ? String(nested.code) : null))
+      .filter((code): code is string => Boolean(code));
+    if (nestedCodes.length > 0) details.push(`nested=${[...new Set(nestedCodes)].join(",")}`);
+  }
+  return details.join(" ");
 }
 
 async function logBotCommandState(reason: string): Promise<void> {
@@ -212,26 +232,39 @@ const configWatcher = startConfigWatcher(configPath, config, async (_reloadedCon
 });
 
 await logger.info("startup phase: start grammY polling");
-await bot.start({
-  drop_pending_updates: true,
+try {
+  await logger.info("startup phase: drop pending updates");
+  await withTimeout(bot.api.deleteWebhook({ drop_pending_updates: true }), BOT_STARTUP_TELEGRAM_TIMEOUT_MS, "drop pending updates");
+} catch (error) {
+  await logger.warn(`drop pending updates skipped: ${formatError(error)}`);
+}
+
+async function runPostPollingStartupTasks(): Promise<void> {
+  await logger.info("startup phase: sync bot commands");
+  await syncBotCommandsSafe("startup");
+  await logger.info("startup phase: ensure usable startup model");
+  await lifecycle.ensureUsableStartupModel();
+  await logger.info("startup phase: prune inactive schedules");
+  const inactiveScheduleCleanup = await scheduleEngine.prune();
+  if (inactiveScheduleCleanup.removed > 0) {
+    await logger.info(`startup pruned ${inactiveScheduleCleanup.removed} inactive schedules: ${inactiveScheduleCleanup.removedIds.join(", ")}`);
+  }
+  await logger.info("startup phase: startup greeting queued");
+  void lifecycle.sendStartupGreeting();
+}
+
+const pollingPromise = bot.start({
   timeout: TELEGRAM_POLL_TIMEOUT_SECONDS,
   onStart: async (botInfo) => {
-    await logger.info("startup phase: sync bot commands");
-    await syncBotCommandsSafe("startup");
     botUsername = botInfo.username || null;
     botUserId = botInfo.id;
     await logger.info(`bot started as @${botInfo.username}`);
-    await logger.info("startup phase: ensure usable startup model");
-    await lifecycle.ensureUsableStartupModel();
-    await logger.info("startup phase: prune inactive schedules");
-    const inactiveScheduleCleanup = await scheduleEngine.prune();
-    if (inactiveScheduleCleanup.removed > 0) {
-      await logger.info(`startup pruned ${inactiveScheduleCleanup.removed} inactive schedules: ${inactiveScheduleCleanup.removedIds.join(", ")}`);
-    }
-    await logger.info("startup phase: startup greeting queued");
-    void lifecycle.sendStartupGreeting();
   },
+}).catch(async (error) => {
+  await logger.error(`grammY polling stopped: ${formatError(error)}`);
 });
+await logger.info("startup phase: grammY polling setup running in background");
+await runPostPollingStartupTasks();
 
 function shutdown(): void {
   scheduleLoop.stop();
@@ -240,6 +273,7 @@ function shutdown(): void {
   if (maintainerRunner.timer) clearInterval(maintainerRunner.timer);
   agentService.stop();
   bot.stop();
+  void pollingPromise;
 }
 
 process.on("SIGINT", shutdown);

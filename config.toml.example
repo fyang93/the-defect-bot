@@ -17,6 +17,3 @@ default_timezone = "Asia/Tokyo"
 [maintenance]
 enabled = true
 idle_after_minutes = 15
-
-[opencode]
-base_url = "http://127.0.0.1:4096"

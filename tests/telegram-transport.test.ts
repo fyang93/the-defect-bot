@@ -170,7 +170,7 @@ describe("telegram file persistence", () => {
       expect(second?.filename).toBe("周报.xlsx");
       expect(first?.absolutePath).toBe(second?.absolutePath);
       expect(second?.savedPath.endsWith("周报.xlsx")).toBe(true);
-      expect(second?.savedPath.includes("-1")).toBe(false);
+      expect(path.basename(second?.savedPath || "").includes("-1")).toBe(false);
       expect(Array.from(new Uint8Array(await readFile(second!.absolutePath)))).toEqual([9, 8, 7]);
     } finally {
       await rm(repoRoot, { recursive: true, force: true });

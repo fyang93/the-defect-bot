@@ -1,4 +1,14 @@
-import { createOpencodeClient } from "@opencode-ai/sdk";
+import path from "node:path";
+import {
+  AuthStorage,
+  createAgentSession,
+  DefaultResourceLoader,
+  ModelRegistry,
+  type ResourceLoader,
+  SessionManager,
+  SettingsManager,
+  type AgentSession,
+} from "@earendil-works/pi-coding-agent";
 import type { AppConfig, AiAttachment, UploadedFile } from "bot/app/types";
 import { logger } from "bot/app/logger";
 import { formatIsoInTimezoneParts } from "bot/app/time";
@@ -13,6 +23,7 @@ export type { AiTurnResult } from "./types";
 
 type SessionEntry = {
   sessionId: string;
+  session: AgentSession;
 };
 
 type PromptRole = "assistant" | "maintainer" | "writer";
@@ -23,7 +34,13 @@ type AttachmentCapabilityCache = {
   checkedAt: number;
 };
 
+type ResourceBundle = {
+  loader: ResourceLoader;
+  settingsManager: SettingsManager;
+};
+
 const MODEL_CAPABILITY_CACHE_MS = 60_000;
+const MODEL_REGISTRY_REFRESH_CACHE_MS = 60_000;
 
 class SessionBroker {
   constructor(
@@ -58,6 +75,8 @@ class SessionBroker {
     const entry = this.sessions.get(key);
     if (!entry) return false;
     try {
+      await entry.session.abort().catch(() => {});
+      entry.session.dispose();
       await this.abort(entry.sessionId);
     } finally {
       this.sessions.delete(key);
@@ -82,12 +101,21 @@ function parseModel(model: string | null): { providerID: string; modelID: string
 }
 
 function extractText(message: unknown): string {
-  const record = message && typeof message === "object" ? message as { parts?: Array<{ type?: string; text?: string }> } : {};
-  const texts = (record.parts || [])
+  const record = message && typeof message === "object" ? message as { content?: unknown } : {};
+  if (typeof record.content === "string") return record.content.trim();
+  const typedRecord = record as { content?: Array<{ type?: string; text?: string }> };
+  const content = Array.isArray(typedRecord.content) ? typedRecord.content : [];
+  const texts = content
     .filter((part) => part.type === "text" && typeof part.text === "string")
     .map((part) => part.text?.trim())
     .filter(Boolean);
   return texts.length > 0 ? texts.join("\n\n") : "";
+}
+
+function extractAssistantText(message: unknown): string {
+  const record = message && typeof message === "object" ? message as { role?: string } : {};
+  if (record.role !== "assistant") return "";
+  return extractText(message);
 }
 
 function summarizeExecutionParts(parts: unknown): Array<{ tool: string; status: string; inputChars: number; outputChars: number }> {
@@ -95,8 +123,8 @@ function summarizeExecutionParts(parts: unknown): Array<{ tool: string; status: 
   return parts.flatMap((part) => {
     if (!part || typeof part !== "object") return [];
     const record = part as Record<string, unknown>;
-    if (record.type !== "tool") return [];
-    const tool = typeof record.tool === "string" ? record.tool.trim() : "";
+    if (record.type !== "tool" && record.type !== "toolCall") return [];
+    const tool = typeof record.tool === "string" ? record.tool.trim() : typeof record.name === "string" ? record.name.trim() : "";
     const stateRecord = record.state && typeof record.state === "object" ? record.state as Record<string, unknown> : null;
     const status = stateRecord && typeof stateRecord.status === "string" ? stateRecord.status.trim() : "unknown";
     const input = stateRecord?.input;
@@ -110,6 +138,39 @@ function summarizeExecutionParts(parts: unknown): Array<{ tool: string; status: 
   });
 }
 
+function summarizeToolResults(messages: unknown): Array<{ tool: string; status: string; inputChars: number; outputChars: number }> {
+  if (!Array.isArray(messages)) return [];
+  return messages.flatMap((message) => {
+    if (!message || typeof message !== "object") return [];
+    const record = message as Record<string, unknown>;
+    if (record.role !== "toolResult") return [];
+    const content = Array.isArray(record.content) ? record.content : [];
+    const output = content.map((part) => part && typeof part === "object" && (part as Record<string, unknown>).type === "text" ? String((part as Record<string, unknown>).text || "") : "").join("\n");
+    return [{
+      tool: typeof record.toolName === "string" ? record.toolName : "unknown",
+      status: record.isError ? "error" : "completed",
+      inputChars: 0,
+      outputChars: output.length,
+    }];
+  });
+}
+
+function summarizeMessagesForDebug(messages: unknown[]): Array<{ role: string; content: string; partTypes: string[]; textChars: number }> {
+  return messages.map((message) => {
+    const record = message && typeof message === "object" ? message as Record<string, unknown> : {};
+    const content = record.content;
+    const partTypes = Array.isArray(content)
+      ? content.map((part) => part && typeof part === "object" && typeof (part as Record<string, unknown>).type === "string" ? String((part as Record<string, unknown>).type) : typeof part).slice(0, 12)
+      : [];
+    return {
+      role: typeof record.role === "string" ? record.role : "unknown",
+      content: Array.isArray(content) ? "array" : typeof content,
+      partTypes,
+      textChars: extractText(message).length,
+    };
+  });
+}
+
 function ensureNoToolExecution(role: PromptRole | undefined, parts: unknown): void {
   if (!role || role === "assistant") return;
   const executionParts = summarizeExecutionParts(parts);
@@ -119,18 +180,24 @@ function ensureNoToolExecution(role: PromptRole | undefined, parts: unknown): vo
 
 export class AiService {
   private config: AppConfig;
-  private client: any;
+  private readonly authStorage: AuthStorage;
+  private readonly modelRegistry: ModelRegistry;
+  private readonly sessionManager: SessionManager;
   private readonly sessions: SessionBroker;
   private readonly replyComposer: ReplyComposer;
   private readonly structuredReasoner: StructuredReasoner;
+  private readonly resourceLoaders = new Map<string, Promise<ResourceBundle>>();
+  private modelRegistryLastRefreshAt = 0;
   private attachmentCapabilityCache: AttachmentCapabilityCache | null = null;
 
   constructor(config: AppConfig) {
     this.config = config;
-    this.client = this.createClient(config);
+    this.authStorage = AuthStorage.create(path.join(this.piAgentDir(), "auth.json"));
+    this.modelRegistry = ModelRegistry.create(this.authStorage, path.join(this.piAgentDir(), "models.json"));
+    this.sessionManager = SessionManager.inMemory(this.config.paths.repoRoot);
     this.sessions = new SessionBroker(
-      (scopeKey, scopeLabel) => this.createSession(scopeKey, scopeLabel),
-      async (sessionId) => { await this.client.session.abort({ path: { id: sessionId } }).catch(() => {}); },
+      (scopeKey, scopeLabel) => this.createSession(scopeKey, scopeLabel, "assistant"),
+      async (_sessionId) => {},
     );
     this.replyComposer = new ReplyComposer(
       config,
@@ -140,49 +207,101 @@ export class AiService {
     this.structuredReasoner = new StructuredReasoner(config, (promptText, attachments, scopeKey) => this.promptAssistantTurn(promptText, attachments, scopeKey), (attachments) => this.attachmentLogSummary(attachments));
   }
 
-  private createClient(config: AppConfig): any {
-    return createOpencodeClient({
-      baseUrl: (config.opencode?.baseUrl || "http://127.0.0.1:4096").trim() || "http://127.0.0.1:4096",
-      directory: config.paths.repoRoot,
-      throwOnError: true,
-      responseStyle: "data",
-    });
+  private agentWorkspaceDir(): string {
+    return path.join(this.config.paths.repoRoot, "agent");
   }
 
-  private opencodeBaseUrl(): string {
-    return (this.config.opencode?.baseUrl || "http://127.0.0.1:4096").trim() || "http://127.0.0.1:4096";
+  private piAgentDir(): string {
+    return path.join(this.agentWorkspaceDir(), ".pi");
   }
 
   reloadConfig(config: AppConfig): void {
     this.config = config;
-    this.client = this.createClient(config);
     this.replyComposer.updateConfig(config);
     this.structuredReasoner.updateConfig(config);
+    this.resourceLoaders.clear();
     this.stop();
   }
 
   async ensureReady(): Promise<void> {
     const startedAt = Date.now();
-    try {
-      await this.client.path.get();
-      await logger.info(`opencode healthcheck ok ms=${Date.now() - startedAt} baseUrl=${this.opencodeBaseUrl()}`);
-    } catch (error) {
-      throw new Error(`OpenCode is unreachable at ${this.opencodeBaseUrl()}. Start the OpenCode server first. ${error instanceof Error ? error.message : String(error)}`.trim());
+    if (Date.now() - this.modelRegistryLastRefreshAt > MODEL_REGISTRY_REFRESH_CACHE_MS) {
+      this.modelRegistry.refresh();
+      this.modelRegistryLastRefreshAt = Date.now();
     }
+    const available = this.modelRegistry.getAvailable();
+    if (available.length === 0) {
+      throw new Error("Pi SDK has no authenticated models available. Configure credentials in agent/.pi/auth.json, environment variables, or agent/.pi/models.json.");
+    }
+    await logger.info(`pi sdk ready ms=${Date.now() - startedAt} models=${available.length}`);
   }
 
-  private async createSession(scopeKey?: string, scopeLabel?: string): Promise<SessionEntry> {
+  private getResourceLoader(role: PromptRole, useTools: boolean): Promise<ResourceBundle> {
+    const key = `${role}:${useTools ? "tools" : "no-tools"}`;
+    const cached = this.resourceLoaders.get(key);
+    if (cached) return cached;
+
+    const promise = (async () => {
+      const startedAt = Date.now();
+      // Use an in-memory settings manager for bot-created sessions. This keeps
+      // Pi from re-reading/installing package resources on every /new session
+      // while still loading our local agent/.pi resources once per process.
+      const settingsManager = SettingsManager.inMemory({
+        compaction: { enabled: false },
+        retry: { enabled: true, maxRetries: 2 },
+      });
+      const loader = new DefaultResourceLoader({
+        cwd: this.config.paths.repoRoot,
+        agentDir: this.piAgentDir(),
+        settingsManager,
+        systemPromptOverride: () => this.systemPromptForRole(role),
+        appendSystemPromptOverride: () => [],
+        noExtensions: !useTools,
+        noSkills: !useTools,
+        noPromptTemplates: true,
+        noContextFiles: !useTools,
+      });
+      await loader.reload();
+      const extensions = loader.getExtensions().extensions.length;
+      const skills = loader.getSkills().skills.length;
+      await logger.info(`pi sdk resources loaded ms=${Date.now() - startedAt} role=${role} tools=${useTools} extensions=${extensions} skills=${skills}`);
+      return { loader, settingsManager };
+    })().catch((error) => {
+      this.resourceLoaders.delete(key);
+      throw error;
+    });
+
+    this.resourceLoaders.set(key, promise);
+    return promise;
+  }
+
+  private selectedModel(): any | undefined {
+    const parsed = parseModel(state.model);
+    return parsed ? this.modelRegistry.find(parsed.providerID, parsed.modelID) : undefined;
+  }
+
+  private async createSession(scopeKey: string | undefined, scopeLabel: string | undefined, role: PromptRole, useTools = role === "assistant"): Promise<SessionEntry> {
     const startedAt = Date.now();
     await this.ensureReady();
-    const response = await this.client.session.create({
-      body: { title: scopeLabel?.trim() || `Chat ${scopeKey?.trim() || new Date().toISOString().slice(0, 19)}` },
-    }) as any;
-    const data = response.data ?? response;
-    if (!data?.id || typeof data.id !== "string") {
-      throw new Error("OpenCode did not return a session id");
+    const selected = this.selectedModel();
+    if (state.model && !selected) {
+      throw new Error(`Selected model is unavailable: ${state.model}`);
     }
-    await logger.info(`opencode session created ms=${Date.now() - startedAt} scope=${JSON.stringify(scopeKey || "global")} title=${JSON.stringify(scopeLabel?.trim() || "")}`);
-    return { sessionId: data.id };
+    const { loader, settingsManager } = await this.getResourceLoader(role, useTools);
+    const { session } = await createAgentSession({
+      cwd: this.config.paths.repoRoot,
+      agentDir: this.piAgentDir(),
+      authStorage: this.authStorage,
+      modelRegistry: this.modelRegistry,
+      model: selected,
+      resourceLoader: loader,
+      sessionManager: this.sessionManager,
+      settingsManager,
+      noTools: useTools ? undefined : "all",
+    });
+    if (scopeLabel?.trim()) session.setSessionName(scopeLabel.trim());
+    await logger.info(`pi sdk session created ms=${Date.now() - startedAt} scope=${JSON.stringify(scopeKey || "global")} title=${JSON.stringify(scopeLabel?.trim() || "")} role=${role} tools=${useTools}`);
+    return { sessionId: session.sessionId, session };
   }
 
   private async getOrCreateSession(scopeKey?: string, scopeLabel?: string): Promise<SessionEntry> {
@@ -202,7 +321,7 @@ export class AiService {
   async abortCurrentSession(scopeKey?: string, scopeLabel?: string): Promise<boolean> {
     const aborted = await this.disposeSession(scopeKey);
     if (aborted) {
-      await logger.warn(`aborted opencode session${scopeLabel ? ` for ${scopeLabel}` : ""}`);
+      await logger.warn(`aborted pi sdk session${scopeLabel ? ` for ${scopeLabel}` : ""}`);
       touchActivity();
     }
     return aborted;
@@ -210,13 +329,10 @@ export class AiService {
 
   async listModels(): Promise<{ defaults: Record<string, string>; models: string[] }> {
     await this.ensureReady();
-    const response = await this.client.config.providers() as any;
-    const data = response.data ?? response;
-    const providers = Array.isArray(data.providers) ? data.providers : [];
-    return {
-      defaults: data.default && typeof data.default === "object" ? data.default as Record<string, string> : {},
-      models: providers.flatMap((provider: any) => Object.keys(provider.models || {}).map((modelID) => `${provider.id}/${modelID}`)).sort((a: string, b: string) => a.localeCompare(b)),
-    };
+    const models = this.modelRegistry.getAvailable().map((model: any) => `${model.provider}/${model.id}`).sort((a, b) => a.localeCompare(b));
+    const current = this.selectedModel() || this.modelRegistry.getAvailable()[0];
+    const defaults = current ? { [current.provider]: current.id } : {};
+    return { defaults, models };
   }
 
   private async selectedModelSupportsAttachments(): Promise<boolean> {
@@ -231,16 +347,13 @@ export class AiService {
 
     try {
       await this.ensureReady();
-      const response = await this.client.config.providers() as any;
-      const data = response.data ?? response;
-      const providers = Array.isArray(data.providers) ? data.providers : [];
-      const provider = providers.find((item: any) => item?.id === parsed.providerID);
-      const model = provider?.models && typeof provider.models === "object" ? provider.models[parsed.modelID] : undefined;
-      const supportsAttachments = model?.capabilities?.attachment !== false;
+      const model = this.modelRegistry.find(parsed.providerID, parsed.modelID) as any;
+      const input = Array.isArray(model?.input) ? model.input : [];
+      const supportsAttachments = input.length === 0 || input.includes("image");
       this.attachmentCapabilityCache = { modelKey, supportsAttachments, checkedAt: now };
       return supportsAttachments;
     } catch (error) {
-      await logger.warn(`failed to inspect model attachment capability model=${JSON.stringify(modelKey)} message=${error instanceof Error ? error.message : String(error)}`);
+      await logger.warn(`failed to inspect pi model attachment capability model=${JSON.stringify(modelKey)} message=${error instanceof Error ? error.message : String(error)}`);
       return true;
     }
   }
@@ -388,18 +501,15 @@ export class AiService {
     void this.sessions.disposeAll();
   }
 
-  private buildParts(text: string, attachments: AiAttachment[]): Array<{ type: "text"; text: string } | { type: "file"; mime: string; filename?: string; url: string }> {
-    const parts: Array<{ type: "text"; text: string } | { type: "file"; mime: string; filename?: string; url: string }> = [{ type: "text", text }];
+  private buildImages(attachments: AiAttachment[]): Array<{ type: "image"; data: string; mimeType: string }> {
+    const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
     for (const attachment of attachments) {
-      if (!attachment.url) continue;
-      parts.push({
-        type: "file",
-        mime: attachment.mimeType,
-        filename: attachment.filename,
-        url: attachment.url,
-      });
+      if (!attachment.mimeType.startsWith("image/") || !attachment.url.startsWith("data:")) continue;
+      const comma = attachment.url.indexOf(",");
+      if (comma < 0) continue;
+      images.push({ type: "image", data: attachment.url.slice(comma + 1), mimeType: attachment.mimeType });
     }
-    return parts;
+    return images;
   }
 
   private systemPromptForRole(role: PromptRole): string {
@@ -409,18 +519,22 @@ export class AiService {
   private async promptInTemporaryTextSession(text: string, role: "assistant" | "maintainer"): Promise<string> {
     return this.promptInDisposableTextSession({
       title: role === "maintainer" ? "Maintainer" : "Assistant",
-      requestLog: `opencode ${role} text prompt request`,
-      rawLogLabel: `opencode ${role} text prompt`,
-      execute: (sessionId) => this.promptSessionForText(sessionId, text, [], role),
+      role,
+      useTools: role === "assistant",
+      requestLog: `pi sdk ${role} text prompt request`,
+      rawLogLabel: `pi sdk ${role} text prompt`,
+      execute: (session) => this.promptSessionForText(session, text, [], role),
     });
   }
 
   private async promptInDisposableAgentTextSession(text: string, role: "assistant"): Promise<string> {
     return this.promptInDisposableTextSession({
       title: "Assistant",
-      requestLog: `opencode ${role} text prompt request`,
-      rawLogLabel: `opencode ${role} text prompt`,
-      execute: async (sessionId) => {
+      role,
+      useTools: true,
+      requestLog: `pi sdk ${role} text prompt request`,
+      rawLogLabel: `pi sdk ${role} text prompt`,
+      execute: async (session) => {
         for (let attempt = 1; attempt <= 2; attempt += 1) {
           const attemptText = attempt === 1
             ? text
@@ -430,7 +544,7 @@ export class AiService {
                 "Your previous output was invalid.",
                 "Use the needed tools, then return only plain user-visible text in the configured persona.",
               ].join("\n");
-          const response = await this.promptSessionForAgent(sessionId, attemptText, [], role);
+          const response = await this.promptSessionForAgent(session, attemptText, [], role);
           const rawText = response.rawText.trim();
           if (rawText && isDisplayableUserText(rawText)) return rawText;
           await logger.warn(`discarded ${role} output attempt=${attempt} reason=${rawText ? "non-displayable" : "empty-output"}`);
@@ -442,37 +556,42 @@ export class AiService {
 
   private async promptInScopedAssistantSession(text: string, attachments: AiAttachment[], scopeKey?: string, scopeLabel?: string, onProgress?: AssistantProgressHandler): Promise<{ rawText: string; usedNativeExecution: boolean; completedActions: string[] }> {
     const entry = await this.getOrCreateSession(scopeKey, scopeLabel);
-    await logger.info("opencode assistant text prompt request");
-    const response = await this.promptSessionForAssistant(entry.sessionId, text, attachments, onProgress);
+    await logger.info("pi sdk assistant text prompt request");
+    const response = await this.promptSessionForAssistant(entry.session, text, attachments, onProgress);
     touchActivity();
-    await logger.info(`opencode assistant text prompt raw=${JSON.stringify(response.rawText)}`);
+    await logger.info(`pi sdk assistant text prompt raw=${JSON.stringify(response.rawText)}`);
     return response;
   }
 
   private async promptInLightTextSession(text: string, role?: PromptRole): Promise<string> {
     return this.promptInDisposableTextSession({
       title: "Light text",
-      requestLog: "opencode light text prompt request",
-      rawLogLabel: "opencode light text prompt",
-      execute: (sessionId) => this.promptSessionForLightText(sessionId, text, [], role),
+      role: role || "writer",
+      useTools: role === "assistant",
+      requestLog: "pi sdk light text prompt request",
+      rawLogLabel: "pi sdk light text prompt",
+      execute: (session) => this.promptSessionForLightText(session, text, [], role),
     });
   }
 
   private async promptInDisposableTextSession(input: {
     title: string;
+    role: PromptRole;
+    useTools: boolean;
     requestLog: string;
     rawLogLabel: string;
-    execute: (sessionId: string) => Promise<string>;
+    execute: (session: AgentSession) => Promise<string>;
   }): Promise<string> {
-    const session = await this.createSession(undefined, input.title);
+    const session = await this.createSession(undefined, input.title, input.role, input.useTools);
     try {
       await logger.info(input.requestLog);
-      const rawText = await input.execute(session.sessionId);
+      const rawText = await input.execute(session.session);
       touchActivity();
       await logger.info(`${input.rawLogLabel} raw=${JSON.stringify(rawText)}`);
       return rawText;
     } finally {
-      await this.client.session.abort({ path: { id: session.sessionId } }).catch(() => {});
+      await session.session.abort().catch(() => {});
+      session.session.dispose();
     }
   }
 
@@ -491,8 +610,8 @@ export class AiService {
 
       let rawText = "";
       try {
-        await logger.info(attempt === 1 ? "opencode prompt request" : "opencode prompt retry request");
-        rawText = await this.promptSessionForLightText(entry.sessionId, promptText, attachments, "assistant");
+        await logger.info(attempt === 1 ? "pi sdk prompt request" : "pi sdk prompt retry request");
+        rawText = await this.promptSessionForLightText(entry.session, promptText, attachments, "assistant");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (/no text output/i.test(message) && attempt < 2) {
@@ -511,126 +630,71 @@ export class AiService {
     throw new Error("Model returned no displayable user reply.");
   }
 
-  private async promptSessionForText(sessionId: string, text: string, attachments: AiAttachment[], role: "assistant" | "maintainer"): Promise<string> {
+  private async promptSessionForText(session: AgentSession, text: string, attachments: AiAttachment[], role: "assistant" | "maintainer"): Promise<string> {
     if (role === "assistant") {
-      return (await this.promptSessionForAssistant(sessionId, text, attachments)).rawText;
+      return (await this.promptSessionForAssistant(session, text, attachments)).rawText;
     }
     const promptAttachments = await this.filterAttachmentsForSelectedModel(attachments, `${role} text prompt`);
     const startedAt = Date.now();
-    await logger.info(`opencode text prompt start sessionId=${sessionId} model=${JSON.stringify(state.model || "default")} textChars=${text.length} attachments=${promptAttachments.length} mode=full role=${role}`);
-    const response = await this.client.session.prompt({
-      path: { id: sessionId },
-      body: {
-        system: this.systemPromptForRole(role),
-        model: parseModel(state.model) || undefined,
-        parts: this.buildParts(text, promptAttachments),
-      },
-    }) as any;
-    const payload = response.data ?? response;
-    const rawText = extractText(payload).trim();
-    await logger.info(`opencode text prompt response ms=${Date.now() - startedAt} sessionId=${sessionId} rawChars=${rawText.length} parts=${Array.isArray(payload?.parts) ? payload.parts.length : 0} mode=full role=${role}`);
-    if (!rawText) throw new Error("OpenCode returned no text output.");
+    await logger.info(`pi sdk text prompt start sessionId=${session.sessionId} model=${JSON.stringify(state.model || "default")} textChars=${text.length} attachments=${promptAttachments.length} mode=full role=${role}`);
+    const result = await this.runPiPrompt(session, text, promptAttachments, false);
+    const rawText = result.rawText.trim();
+    await logger.info(`pi sdk text prompt response ms=${Date.now() - startedAt} sessionId=${session.sessionId} rawChars=${rawText.length} mode=full role=${role}`);
+    if (!rawText) throw new Error("Pi SDK returned no text output.");
     return rawText;
   }
 
-  async promptSessionForAssistant(sessionId: string, text: string, attachments: AiAttachment[], _onProgress?: AssistantProgressHandler): Promise<{ rawText: string; usedNativeExecution: boolean; completedActions: string[] }> {
-    return this.promptSessionForAgent(sessionId, text, attachments, "assistant");
+  async promptSessionForAssistant(session: AgentSession, text: string, attachments: AiAttachment[], _onProgress?: AssistantProgressHandler): Promise<{ rawText: string; usedNativeExecution: boolean; completedActions: string[] }> {
+    return this.promptSessionForAgent(session, text, attachments, "assistant");
   }
 
-  private async promptSessionForAgent(sessionId: string, text: string, attachments: AiAttachment[], role: "assistant"): Promise<{ rawText: string; usedNativeExecution: boolean; completedActions: string[] }> {
+  private async promptSessionForAgent(session: AgentSession, text: string, attachments: AiAttachment[], role: "assistant"): Promise<{ rawText: string; usedNativeExecution: boolean; completedActions: string[] }> {
     const promptAttachments = await this.filterAttachmentsForSelectedModel(attachments, `${role} agent prompt`);
     const startedAt = Date.now();
-    await logger.info(`opencode text prompt start sessionId=${sessionId} model=${JSON.stringify(state.model || "default")} textChars=${text.length} attachments=${promptAttachments.length} mode=full role=${role}`);
-    const response = await this.client.session.prompt({
-      path: { id: sessionId },
-      body: {
-        agent: "build",
-        system: this.systemPromptForRole(role),
-        model: parseModel(state.model) || undefined,
-        parts: this.buildParts(text, promptAttachments),
-      },
-    }) as any;
-    const payload = response.data ?? response;
-    const rawText = extractText(payload).trim();
-    const directCompletedActions = this.extractCompletedActions(payload?.parts);
-    const completedActions = directCompletedActions.length > 0
-      ? directCompletedActions
-      : await this.extractCompletedActionsFromSessionHistory(sessionId, payload);
-    const executionParts = summarizeExecutionParts(payload?.parts);
-    await logger.info(`opencode text prompt response ms=${Date.now() - startedAt} sessionId=${sessionId} rawChars=${rawText.length} parts=${Array.isArray(payload?.parts) ? payload.parts.length : 0} mode=full role=${role} actions=${completedActions.length}`);
+    await logger.info(`pi sdk text prompt start sessionId=${session.sessionId} model=${JSON.stringify(state.model || "default")} textChars=${text.length} attachments=${promptAttachments.length} mode=full role=${role}`);
+    const result = await this.runPiPrompt(session, text, promptAttachments, true);
+    const rawText = result.rawText.trim();
+    const completedActions = result.completedActions;
+    const executionParts = summarizeToolResults(result.newMessages);
+    await logger.info(`pi sdk text prompt response ms=${Date.now() - startedAt} sessionId=${session.sessionId} rawChars=${rawText.length} messages=${result.newMessages.length} mode=full role=${role} actions=${completedActions.length}`);
     if (executionParts.length > 0) {
-      await logger.info(`opencode ${role} execution parts ${JSON.stringify(executionParts)}`);
+      await logger.info(`pi sdk ${role} execution parts ${JSON.stringify(executionParts)}`);
     }
     return { rawText, usedNativeExecution: completedActions.length > 0, completedActions };
   }
 
-  private async promptSessionForLightText(sessionId: string, text: string, attachments: AiAttachment[], role?: PromptRole): Promise<string> {
+  private async promptSessionForLightText(session: AgentSession, text: string, attachments: AiAttachment[], role?: PromptRole): Promise<string> {
     const promptAttachments = await this.filterAttachmentsForSelectedModel(attachments, `${role || "default"} light prompt`);
     const startedAt = Date.now();
-    await logger.info(`opencode text prompt start sessionId=${sessionId} model=${JSON.stringify(state.model || "default")} textChars=${text.length} attachments=${promptAttachments.length} mode=light${role ? ` role=${role}` : ""}`);
-    const response = await this.client.session.prompt({
-      path: { id: sessionId },
-      body: {
-        agent: role === "assistant" ? "build" : undefined,
-        system: role ? this.systemPromptForRole(role) : undefined,
-        model: parseModel(state.model) || undefined,
-        parts: this.buildParts(text, promptAttachments),
-      },
-    }) as any;
-    const payload = response.data ?? response;
-    ensureNoToolExecution(role, payload?.parts);
-    const rawText = extractText(payload).trim();
-    await logger.info(`opencode text prompt response ms=${Date.now() - startedAt} sessionId=${sessionId} rawChars=${rawText.length} parts=${Array.isArray(payload?.parts) ? payload.parts.length : 0} mode=light`);
-    if (!rawText) throw new Error("OpenCode returned no text output.");
+    await logger.info(`pi sdk text prompt start sessionId=${session.sessionId} model=${JSON.stringify(state.model || "default")} textChars=${text.length} attachments=${promptAttachments.length} mode=light${role ? ` role=${role}` : ""}`);
+    const result = await this.runPiPrompt(session, text, promptAttachments, role === "assistant");
+    ensureNoToolExecution(role, result.newMessages.flatMap((message: any) => Array.isArray(message?.content) ? message.content : []));
+    const rawText = result.rawText.trim();
+    await logger.info(`pi sdk text prompt response ms=${Date.now() - startedAt} sessionId=${session.sessionId} rawChars=${rawText.length} messages=${result.newMessages.length} mode=light`);
+    if (!rawText) {
+      await logger.warn(`pi sdk returned no assistant text model=${JSON.stringify(state.model || "default")} sessionId=${session.sessionId} messages=${JSON.stringify(summarizeMessagesForDebug(result.newMessages))}`);
+      throw new Error(`Pi SDK returned no text output from model ${state.model || "default"}.`);
+    }
+    if (rawText === text.trim()) throw new Error("Pi SDK echoed the input prompt instead of returning assistant text.");
     return rawText;
   }
 
-  private async extractCompletedActionsFromSessionHistory(sessionId: string, payload: unknown): Promise<string[]> {
-    const record = payload && typeof payload === "object" ? payload as Record<string, unknown> : null;
-    const info = record?.info && typeof record.info === "object" ? record.info as Record<string, unknown> : null;
-    const parentId = typeof info?.parentID === "string" ? info.parentID.trim() : "";
-    if (!parentId) return [];
+  private async runPiPrompt(session: AgentSession, text: string, attachments: AiAttachment[], collectTools: boolean): Promise<{ rawText: string; completedActions: string[]; newMessages: unknown[] }> {
+    const beforeCount = session.messages.length;
+    const completedActions: string[] = [];
+    const chunks: string[] = [];
+    const unsubscribe = session.subscribe((event) => {
+      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") chunks.push(event.assistantMessageEvent.delta);
+      if (collectTools && event.type === "tool_execution_end" && !event.isError) completedActions.push(event.toolName);
+    });
     try {
-      const response = await this.client.session.messages({ path: { id: sessionId } }) as any;
-      const messages = response.data ?? response;
-      const names = this.extractCompletedActionsFromMessages(messages, parentId);
-      if (names.length > 0) {
-        await logger.info(`opencode assistant recovered execution history parentId=${parentId} actions=${JSON.stringify(names)}`);
-      }
-      return names;
-    } catch (error) {
-      await logger.warn(`failed to recover assistant execution history sessionId=${sessionId} message=${error instanceof Error ? error.message : String(error)}`);
-      return [];
+      await session.prompt(text, { images: this.buildImages(attachments), expandPromptTemplates: false, source: "api" as any });
+    } finally {
+      unsubscribe();
     }
-  }
-
-  private extractCompletedActionsFromMessages(messages: unknown, parentId: string): string[] {
-    if (!Array.isArray(messages) || !parentId) return [];
-    const names: string[] = [];
-    for (const message of messages) {
-      if (!message || typeof message !== "object") continue;
-      const record = message as Record<string, unknown>;
-      const info = record.info && typeof record.info === "object" ? record.info as Record<string, unknown> : null;
-      if (!info || info.role !== "assistant") continue;
-      if ((typeof info.parentID === "string" ? info.parentID.trim() : "") !== parentId) continue;
-      names.push(...this.extractCompletedActions(record.parts));
-    }
-    return names;
-  }
-
-  private extractCompletedActions(parts: unknown): string[] {
-    if (!Array.isArray(parts)) return [];
-    const names: string[] = [];
-    for (const part of parts) {
-      if (!part || typeof part !== "object") continue;
-      const record = part as Record<string, unknown>;
-      if (record.type !== "tool") continue;
-      const tool = typeof record.tool === "string" ? record.tool.trim() : "";
-      const stateRecord = record.state && typeof record.state === "object" ? record.state as Record<string, unknown> : null;
-      const status = stateRecord && typeof stateRecord.status === "string" ? stateRecord.status.trim() : "";
-      if (tool && status === "completed") names.push(tool);
-    }
-    return names;
+    const newMessages = session.messages.slice(beforeCount);
+    const lastAssistantText = [...newMessages].reverse().map(extractAssistantText).find((item) => item.trim()) || chunks.join("");
+    return { rawText: lastAssistantText, completedActions, newMessages };
   }
 
   private attachmentLogSummary(attachments: AiAttachment[]): Array<{ mimeType: string; filename?: string; urlScheme: string }> {

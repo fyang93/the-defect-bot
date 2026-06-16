@@ -10,6 +10,10 @@ node_modules/
 config.toml
 .env
 logs/
+agent/.pi/auth.json
+agent/.pi/models.json
+agent/.pi/sessions/
+agent/.pi/npm/
 
 tmp/*
 !tmp/.gitkeep
@@ -31,4 +35,3 @@ system/**
 !system/schemas/**
 
 .nfs*
-

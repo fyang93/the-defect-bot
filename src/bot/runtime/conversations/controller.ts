@@ -2,7 +2,7 @@ import type { Bot, Context } from "grammy";
 import type { AppConfig, AiAttachment, UploadedFile } from "bot/app/types";
 import { logger } from "bot/app/logger";
 
-import { editMessageTextFormatted } from "bot/telegram/format";
+import { editMessageTextFormatted, isTransientTelegramNetworkError, sendTelegramWithRetry } from "bot/telegram/format";
 import { getAccurateNowIso } from "bot/app/time";
 import {
   clearRecentUploads,
@@ -105,6 +105,7 @@ type MediaGroupCacheEntry = {
 const MEDIA_GROUP_CACHE_TTL_MS = 60 * 60 * 1000;
 const MEDIA_GROUP_CACHE_MAX_GROUPS = 200;
 const STARTUP_COALESCE_MAX_MS = 500;
+const COSMETIC_TELEGRAM_FAILURE_COOLDOWN_MS = 60_000;
 
 function isExpectedFileIngressError(message: string): boolean {
   return /file is too big|bot download limit|exceeds limit of/i.test(message);
@@ -141,6 +142,7 @@ export class ConversationController {
   private readonly activeTasks;
   private readonly mediaGroups = new Map<string, MediaGroupCacheEntry>();
   private readonly turns = new Map<string, ConversationTurnSlot>();
+  private cosmeticTelegramUnavailableUntil = 0;
 
   constructor(private readonly deps: ConversationControllerDeps) {
     this.activeTasks = new ActiveConversationTasks(
@@ -163,18 +165,32 @@ export class ConversationController {
   }
 
   async setReactionByMessageSafe(chatId: number, messageId: number, emoji: string): Promise<void> {
+    if (this.cosmeticTelegramUnavailableUntil > Date.now()) return;
     const api = this.deps.bot.api as ReactionCapableApi;
     if (!api.setMessageReaction) {
       await logger.warn(`reaction unsupported chat=${chatId} message=${messageId} emoji=${emoji}`);
       return;
     }
     try {
-      await api.setMessageReaction(chatId, messageId, [{ type: "emoji", emoji }], false);
+      await sendTelegramWithRetry(
+        () => api.setMessageReaction!(chatId, messageId, [{ type: "emoji", emoji }], false),
+        "set reaction",
+        { attempts: 1 },
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (isTransientTelegramNetworkError(error)) {
+        this.cosmeticTelegramUnavailableUntil = Date.now() + COSMETIC_TELEGRAM_FAILURE_COOLDOWN_MS;
+        await logger.warn(`cosmetic telegram operations paused after reaction network failure chat=${chatId} message=${messageId} emoji=${emoji}: ${message}`);
+        return;
+      }
       if (emoji !== "😢" && /REACTION_INVALID/i.test(message)) {
         try {
-          await api.setMessageReaction(chatId, messageId, [{ type: "emoji", emoji: "😢" }], false);
+          await sendTelegramWithRetry(
+            () => api.setMessageReaction!(chatId, messageId, [{ type: "emoji", emoji: "😢" }], false),
+            "set fallback reaction",
+            { attempts: 2, delaysMs: [250] },
+          );
           await logger.warn(`reaction fallback chat=${chatId} message=${messageId} from=${emoji} to=😢 reason=${message}`);
           return;
         } catch (fallbackError) {
@@ -220,12 +236,16 @@ export class ConversationController {
   }
 
   private async sendWaitingMessageSafe(ctx: Context, text: string): Promise<{ message_id?: number } | null> {
+    if (this.cosmeticTelegramUnavailableUntil > Date.now()) return null;
     try {
-      return await ctx.reply(text);
+      return await sendTelegramWithRetry(() => ctx.reply(text), "send waiting message", { attempts: 1 });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const chatId = ctx.chat?.id;
       const sourceMessageId = ctx.message?.message_id;
+      if (isTransientTelegramNetworkError(error)) {
+        this.cosmeticTelegramUnavailableUntil = Date.now() + COSMETIC_TELEGRAM_FAILURE_COOLDOWN_MS;
+      }
       await logger.warn(`waiting message send failed chat=${chatId ?? "unknown"} message=${sourceMessageId ?? "unknown"}: ${message}`);
       return null;
     }

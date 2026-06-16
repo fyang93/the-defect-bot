@@ -1,43 +1,36 @@
-# 开发原则
+# Engineering principles
 
-发现代码违反这些原则时，直接按这些原则收敛，不要继续迁就旧结构。
+This project defaults to **Pi SDK + Pi tools + deterministic repository state**.
 
-这个项目默认采用 **CLI + skills** 执行模型，目标是：骨架小、边界清楚、确定性留在代码里。
+## State and execution
 
-## 1. 真相边界
+- Keep canonical state in repository files under `system/`, `memory/`, and related domain stores.
+- Mutate canonical state through deterministic code paths: operations, schemas, repo CLI, and Pi tools.
+- Do not encode durable persistence protocols only in prompts.
+- Do not write under `system/` except through approved deterministic interfaces.
 
-- 运行时依赖的规范事实必须放在结构化持久化里，不放在 prompt、会话历史、CLI 文本输出或 markdown 笔记里。
-- `system/` 下的数据是规范状态；读可以，写必须走受控的 CLI 或确定性代码路径。
-- 代码里已经确认的结果，才算动作真的发生；不要在 prompt 或文案里再复制一套“真相”。
-- memory 用于长期笔记和参考资料，不替代规范运行状态。
+## Agent lanes
 
-## 2. runtime 与 CLI
+- Main assistant sessions may load `agent/.pi/AGENTS.md`, tools, and skills.
+- Composer/writer tasks should be small, no-tools, and no-context by default.
+- Maintainer tasks should remain narrow and should not accidentally gain user-facing delivery or repository mutation capability.
+- If a task only writes user-visible text, do not load full assistant context.
 
-- runtime 负责当前回合回复发布、等待态 UI、中断、取消、去重和避免重复发送。
-- 权限、参数校验、日志、结果判断必须在代码里做，不依赖 prompt 或 skill 自觉遵守。
-- 仓库 CLI 是修改规范状态的默认入口；bot 侧代码和 repo CLI 侧代码应保持显式分离。
-- CLI 可以输出简短终端日志帮助人和模型理解过程，但最终结果边界仍要稳定、可程序判定。
-- 终端日志应低噪声：默认只打印关键步骤、最终结果和异常/拒绝原因。
+## Telegram runtime
 
-## 3. prompt 与用户输出
+- Runtime code owns current-turn reply publication, waiting UI, reactions, and duplicate-publication safeguards.
+- Telegram is a platform adapter, not the source of canonical state.
+- Transient Telegram network failures should not block assistant execution when the failed action is cosmetic.
 
-- prompt 只保留最小必要上下文；确定性规则和持久化边界放在代码里。
-- 用户可见措辞优先交给模型；代码负责提供事实、状态和约束。
-- 用户回复应描述已确认、与用户有关的结果，不主动暴露内部命令、prompt 规则、文件路径或实现细节，除非用户明确要求。
-- 同一回合的用户可见输出要和真实执行顺序一致；不要在文件或消息已经发出后，再说“接下来发送”或“准备发送”。
-- persona 在最终用户文本生成时生效，不要做额外的二次润色层。
-- 只要工作可能明显变慢，就尽早给一个简短确认；若确实需要中途进展提示，也应短、少、并与真实进度一致。
+## Access boundaries
 
-## 4. 结构与简化
+- `allowed`, `trusted`, and `admin` are security-relevant boundaries.
+- Allowed users may only act within their own or linked conversation context.
+- Admin-only actions include durable role changes and temporary authorization grants.
 
-- 核心保持小；若更简单的结构能守住同样的真相边界，就优先少概念、少层次、少文件。
-- 优先复用标准库、成熟库和现有稳定模块，不为小问题新造轻量框架。
-- orchestrator 保持薄；业务逻辑放领域服务；平台细节留在 adapter。
-- 不额外引入索引层、缓存层、队列层，除非它们确实在保护正确性、调度或恢复边界。
-- 同一条规则不要同时散落在代码、prompt、skill、docs 里；发现重复就删掉重复层。
+## Prompt and tool design
 
-## 5. 面向未来模型
-
-- 信任模型能力，但把正确性边界放在代码里。
-- 模型输出不合格时，优先拒绝、重试或安全失败，不靠脆弱补丁把错误结果“修成能用”。
-- 不要为了迁就某个弱模型长期保留内容特定的字符串黑名单或输出修补逻辑。
+- Keep long-lived assistant behavior in `agent/.pi/AGENTS.md`.
+- Keep short task prompts in composer/maintainer-specific templates or code paths.
+- Prefer Pi tools with schemas over large skill instructions for routine deterministic actions.
+- Skills should be reserved for memory and narrow helper workflows that benefit from progressive disclosure.

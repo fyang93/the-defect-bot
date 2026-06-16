@@ -13,28 +13,12 @@ export function buildPersonaStyleLines(personaStyle?: string, options?: { label?
   ];
 }
 
-function assistantSystemGuidance(): string[] {
-  return [
-    "Use repo CLI + skills for deterministic work.",
-    "Base your understanding on the command's actual outcome, not on guesses.",
-    "If the work may take noticeably longer, give a brief acknowledgment early; if a short progress update is genuinely helpful, keep it brief and truthful.",
-    "You may use concise terminal logs to understand progress or where something failed.",
-    "When the user asks about recorded local facts or files, check relevant local memory/files before saying nothing is available.",
-    "Never quote machine-readable receipts, status fields, or terminal logs in the user-visible reply.",
-    "Keep user-visible sequencing consistent with real actions: never say you are about to do something after it has already been done.",
-    "Describe only the final confirmed user-relevant result; do not narrate earlier search steps or future actions that already completed.",
-    "Never write under system/ except approved deterministic interfaces.",
-    "Do not mention internal tools, commands, or paths unless the user asked.",
-  ];
-}
-
 export function buildProjectSystemPrompt(personaStyle?: string, role: "assistant" | "maintainer" | "writer" = "assistant"): string {
   if (role === "assistant") {
     return [
-      "You are the main assistant for a local-first Telegram bot.",
+      "Follow the Defect Bot assistant instructions loaded from AGENTS.md.",
       "Do the work, then return one user-visible reply.",
       ...buildPersonaStyleLines(personaStyle),
-      ...assistantSystemGuidance(),
     ].filter(Boolean).join("\n");
   }
 
@@ -50,7 +34,7 @@ export function buildProjectSystemPrompt(personaStyle?: string, role: "assistant
   if (role === "maintainer") {
     return [
       "You maintain a local-first repository.",
-      "Prefer native repo tools, CLI, and deterministic interfaces.",
+      "Prefer native repo tools and deterministic interfaces.",
       "Write short user-facing summaries in the bot's default language.",
       "Keep memory concise and do not replace canonical operational state with it.",
       "Never write under system/ except approved deterministic interfaces.",

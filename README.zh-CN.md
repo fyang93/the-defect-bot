@@ -4,7 +4,7 @@
 
 一个本地优先的 Telegram bot，用于个人记忆、文件、日程，以及轻量的消息转达流程。
 
-它通过本地 OpenCode 服务运行，把规范事实保存在仓库里，并把 Telegram 视为平台适配器，而不是整个系统的中心。
+它通过 Pi SDK 运行，把规范事实保存在仓库里，并把 Telegram 视为平台适配器，而不是整个系统的中心。
 
 ## 它能做什么
 
@@ -17,7 +17,7 @@
 
 ## 架构
 
-整体上，它是一个简洁的分层系统：bot 运行时、平台适配、AI、仓库 CLI、领域事务、档案，并优先把仓库 CLI 作为确定性执行边界。最近一轮深挖已经把调度生命周期收口到 `ScheduleEngine`，把启动与运行时编排收口到 bot 生命周期模块，并把 OpenCode 会话生命周期收口到内部的 `SessionBroker` 接缝。
+整体上，它是一个简洁的分层系统：bot 运行时、平台适配、Pi SDK 通道、Pi tools、仓库 CLI、领域事务、档案。面向 assistant 的确定性边界是 repository Pi tools，底层仍复用现有 repository CLI。最近一轮深挖已经把调度生命周期收口到 `ScheduleEngine`，把启动与运行时编排收口到 bot 生命周期模块，并把 Pi SDK 会话 / 资源生命周期收口到内部的 broker/cache 接缝。
 
 ```text
 交互
@@ -27,33 +27,33 @@
 调度
   协调循环、会话与任务时机
   |
-  +-- 助手
-  |     一个主 agent 负责理解请求与执行
+  +-- Assistant 通道
+  |     主 Pi agent 负责理解请求与执行
   |     |
-  |     +--> Repository CLI + Skills
+  |     +--> Pi tools -> Repository CLI
   |     |      |
   |     |      +--> 事务 / 档案
   |     |             领域逻辑与规范持久状态
   |
-  +-- 维护器
-         清理、修复与维护
-         |
-         +--> 事务
+  +-- Composer / Maintainer 通道
+         短文本生成、维护摘要和窄任务
 ```
 
 当前对话主流程以单助手通道为中心：
 
 - bot 侧代码和 repo CLI 侧代码分别收敛在 `src/bot/**` 与 `src/cli/**`，边界显式分开
 
-- 助手直接理解请求，并在需要时直接执行工作
-- 当前方向是由 runtime 代码负责当前回合回复发布，而 assistant 主要使用仓库内 CLI 和 skills 完成工作
+- 助手直接理解请求；涉及确定性状态时通过 Pi tools 执行
+- 当前方向是由 runtime 代码负责当前回合回复发布，而确定性的仓库动作以 Pi tools 形式暴露给 assistant，底层仍由 repository CLI 执行
+- composer/writer 任务，例如启动问候、提醒文案、用户可见回复改写，使用窄的 no-tools/no-context Pi session
+- maintainer 任务保持窄职责，不应意外获得当前回合投递或仓库修改能力
 - runtime 代码负责等待态 UI、中断、启动阶段的短暂聚合 / 输入合并，以及避免重复发送
 - i18n 保持最小化，只保留和 command / UI 直接绑定的文本；自然对话措辞交给模型生成
 - assistant 的自然回复语言跟随用户实际对话语言，而固定 UI 文本跟随配置中的默认界面语言
 
 ### 会话作用域
 
-短期对话上下文由 OpenCode 会话按作用域保存：
+短期对话上下文由 Pi SDK 会话按作用域保存：
 
 - **私聊** -> 每个用户一个会话
 - **群 / 超级群** -> 每个群一个会话
@@ -65,18 +65,21 @@
 - `system/state.json`
 - `system/events.json`
 
-这些状态现在优先通过确定性代码路径和 repository CLI 管理，而不是继续依赖 prompt 里定义的大型持久化协议。项目级工程原则现在统一写在 `docs/principles.md`。
+这些状态现在优先通过确定性代码路径、Pi tools 和 repository CLI 管理，而不是继续依赖 prompt 里定义的大型持久化协议。项目级工程原则现在统一写在 `AGENTS.md` 和 `docs/principles.md`。
 
-## Skill map
+## Agent workspace
 
-仓库里的 skill 集合保持得很小。仓库特定工作应优先走 CLI + skills：
+Pi agent 资源集中放在 `agent/`：
 
-- `cli-events`：事件、提醒与自动化流程
-- `cli-telegram`：Telegram 外发投递相关流程
-- `cli-access`：用户与授权相关流程
-- `cli-rules`：面向未来的持久 assistant 规则
-- `memory`：仓库本地的长期笔记、偏好与事实
-- `custom-toolbox`：窄而专用的项目工具流程
+- `agent/.pi/AGENTS.md`：主 assistant 指令，只由 assistant/tool session 加载
+- `agent/.pi/extensions/defect-bot-tools`：由 repository CLI 支撑的 Pi tools，覆盖事件、用户/授权/规则和 Telegram 投递
+- `agent/.pi/skills/memory`：仓库本地长期笔记、偏好与事实
+- `agent/.pi/skills/custom-toolbox`：窄而专用的项目工具流程
+- `agent/.pi/auth.json` 与 `agent/.pi/models.json`：本地凭证 / 模型配置，已被 git 忽略
+
+常规确定性工作应优先使用 Pi tools，而不是重新读取 CLI skill 包装层。`just agent` 会打开指向该 workspace 的交互式 Pi 会话，方便本地调试 assistant。
+
+assistant / composer / maintainer 通道和资源加载规则见 `docs/agent-architecture.md`。
 
 ## 快速开始
 
@@ -84,8 +87,10 @@
 cp config.toml.example config.toml
 cp .env.example .env
 just install
-# 通过 npm 使用项目内的 OpenCode 二进制，不依赖全局安装
+# 直接使用 Pi SDK；请在 agent/.pi/auth.json 或环境变量中配置模型凭证
 just serve
+# 可选：打开同一个 agent workspace 的交互式 Pi 会话
+just agent
 ```
 
 ## 配置
@@ -114,8 +119,6 @@ default_timezone = "Asia/Tokyo"
 enabled = true
 idle_after_minutes = 15
 
-[opencode]
-base_url = "http://127.0.0.1:4096"
 ```
 
 一些常用的可选项：
@@ -126,7 +129,6 @@ base_url = "http://127.0.0.1:4096"
 - `bot.language`：固定 UI 文本使用的默认界面语言；可选 `zh-CN` 或 `en`
 - `bot.default_timezone`：用户未显式提供时使用的默认时区
 - `maintenance.idle_after_minutes`：空闲多少分钟后触发 maintenance
-- `opencode.base_url`：本地 OpenCode 服务地址
 
 ## Telegram 使用前提
 
@@ -169,6 +171,6 @@ npm run test:live
 just test
 ```
 
-`just serve` 会先通过 `npm exec -- opencode serve --port 4096` 启动项目内的 OpenCode 服务，再启动 bot。
+`just serve` 会直接启动 bot；模型/供应商访问由 Pi SDK 解析。
 
 当前回归测试覆盖了确定性的存储行为和真实自然语言流程，包括日程 CRUD、用户访问级别变更、外发消息、符合 persona 的用户可见文案，以及按用户时区换算后注入的时间上下文。
