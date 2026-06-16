@@ -7,12 +7,20 @@ import { buildPersonaStyleLines } from "./prompt";
 import type { ReminderTextContext } from "./types";
 
 export type ReplyComposerInputContext = { requesterUserId?: number; chatId?: number; chatType?: string; preferredLanguage?: string };
+export type ComposerPromptInput = {
+  task: string;
+  context: string;
+  language: string;
+  style: string;
+  capabilities: string;
+};
 
 export class ReplyComposer {
   constructor(
     private config: AppConfig,
     private readonly promptForText: (text: string) => Promise<string>,
     private readonly promptForStartupText: (text: string) => Promise<string> = promptForText,
+    private readonly renderComposerPrompt?: (input: ComposerPromptInput) => string,
   ) {}
 
   updateConfig(config: AppConfig): void {
@@ -20,7 +28,7 @@ export class ReplyComposer {
   }
 
   async generateStartupGreeting(input?: ReplyComposerInputContext): Promise<string | null> {
-    const request = this.buildUserFacingTextRequest([
+    const request = this.buildComposerRequest("startup-greeting", [
       "The Telegram bot has just started.",
       "Write one short proactive startup greeting for the administrator.",
       "Return only the greeting text. Do not send it and do not take any action.",
@@ -33,7 +41,7 @@ export class ReplyComposer {
   async generateReminderText(reminderText: string, notifyAt: string, recurrenceDescription: string, timezone: string, context?: ReminderTextContext): Promise<string> {
     const localReminderTime = formatIsoInTimezoneParts(notifyAt, timezone?.trim());
     const localEventTime = context?.eventScheduledAt ? formatIsoInTimezoneParts(context.eventScheduledAt, timezone?.trim()) : null;
-    const request = this.buildUserFacingTextRequest([
+    const request = this.buildComposerRequest("reminder-text", [
       "Write one short natural reminder message for the recipient.",
       "Assume the message is delivered at the scheduled message delivery time, not at generation time.",
       "Anchor any time wording to the scheduled message delivery time below.",
@@ -55,32 +63,38 @@ export class ReplyComposer {
     return result;
   }
 
-  async composeUserReply(baseMessage: string | null | undefined, facts: string[], input?: ReplyComposerInputContext): Promise<string> {
+  async composeMaintenanceReport(facts: string[], input?: ReplyComposerInputContext): Promise<string> {
     const cleanFacts = facts.map((item) => item.trim()).filter(Boolean);
-    const cleanBase = baseMessage?.trim() || "";
-    if (!cleanBase && cleanFacts.length === 0) return "";
+    if (cleanFacts.length === 0) return "";
 
-    const request = this.buildUserFacingTextRequest([
+    const request = this.buildComposerRequest("maintenance-report", [
       ...this.buildMinimalContextLines(input),
-      cleanBase ? `Draft: ${cleanBase}` : "",
-      cleanFacts.length > 0 ? "Confirmed facts:" : "",
+      "Confirmed maintenance facts:",
       ...cleanFacts.map((item) => `- ${item}`),
-      cleanFacts.length > 0 ? "Write one concise reply using the confirmed facts." : "Rewrite the draft into one concise natural reply.",
+      "Write one concise admin-facing maintenance report using only these facts.",
     ], { preferredLanguage: input?.preferredLanguage });
 
     const composed = this.extractDirectTextReply(await this.promptForText(request)).trim();
-    return composed || cleanBase;
+    return composed || cleanFacts.join("\n");
   }
 
-  private buildUserFacingTextRequest(lines: string[], options?: { separator?: string; includePersonaStyle?: boolean; preferredLanguage?: string }): string {
+  private buildComposerRequest(task: string, lines: string[], options?: { separator?: string; includePersonaStyle?: boolean; preferredLanguage?: string; capabilities?: string }): string {
     const separator = options?.separator ?? "\n";
     const includePersonaStyle = options?.includePersonaStyle ?? true;
-    return [
+    const context = [
       ...lines,
       options?.preferredLanguage ? `Use this language for the reply: ${options.preferredLanguage}.` : "",
       "Return plain user-visible text only.",
       ...(includePersonaStyle ? buildPersonaStyleLines(this.config.bot.personaStyle, { label: "Reply style" }) : []),
     ].filter(Boolean).join(separator);
+    if (!this.renderComposerPrompt) return context;
+    return this.renderComposerPrompt({
+      task,
+      context,
+      language: options?.preferredLanguage || this.config.bot.language,
+      style: this.config.bot.personaStyle?.trim() || "default",
+      capabilities: options?.capabilities || "web: false\nstateMutation: false\ntelegramDelivery: false\nrepoTools: false",
+    });
   }
 
   private async buildStartupGreetingContextLines(input?: ReplyComposerInputContext): Promise<string[]> {

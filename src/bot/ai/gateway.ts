@@ -1,12 +1,8 @@
 import path from "node:path";
 import {
   AuthStorage,
-  createAgentSession,
-  DefaultResourceLoader,
   ModelRegistry,
-  type ResourceLoader,
   SessionManager,
-  SettingsManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type { AppConfig, AiAttachment, UploadedFile } from "bot/app/types";
@@ -18,15 +14,16 @@ import { extractAiTurnResultFromText, isDisplayableUserText } from "./response";
 import type { AiTurnResult, AssistantPlanResult, AssistantProgressHandler, ReminderTextContext } from "./types";
 import { ReplyComposer, type ReplyComposerInputContext } from "./reply-composer";
 import { StructuredReasoner } from "./structured-reasoner";
+import { PromptTemplateRenderer } from "./prompt-templates";
+import { ensureNoToolExecution, extractAssistantText, summarizeMessagesForDebug, summarizeToolResults, type PiPromptRole } from "./pi-response";
+import { SessionBroker, type SessionBrokerEntry } from "./session-broker";
+import { PiSessionFactory, type CreateSessionOptions } from "./pi-session-factory";
 
 export type { AiTurnResult } from "./types";
 
-type SessionEntry = {
-  sessionId: string;
-  session: AgentSession;
-};
+type SessionEntry = SessionBrokerEntry<AgentSession>;
 
-type PromptRole = "assistant" | "maintainer" | "writer";
+type PromptRole = PiPromptRole;
 
 type AttachmentCapabilityCache = {
   modelKey: string;
@@ -34,61 +31,9 @@ type AttachmentCapabilityCache = {
   checkedAt: number;
 };
 
-type ResourceBundle = {
-  loader: ResourceLoader;
-  settingsManager: SettingsManager;
-};
-
 const MODEL_CAPABILITY_CACHE_MS = 60_000;
 const MODEL_REGISTRY_REFRESH_CACHE_MS = 60_000;
-
-class SessionBroker {
-  constructor(
-    private readonly create: (scopeKey?: string, scopeLabel?: string) => Promise<SessionEntry>,
-    private readonly abort: (sessionId: string) => Promise<void>,
-  ) {}
-
-  private readonly sessions = new Map<string, SessionEntry>();
-
-  private key(scopeKey?: string): string {
-    return scopeKey?.trim() || "global";
-  }
-
-  async getOrCreate(scopeKey?: string, scopeLabel?: string): Promise<SessionEntry> {
-    const key = this.key(scopeKey);
-    const existing = this.sessions.get(key);
-    if (existing) return existing;
-    const created = await this.create(scopeKey, scopeLabel);
-    this.sessions.set(key, created);
-    return created;
-  }
-
-  async reset(scopeKey?: string, scopeLabel?: string): Promise<SessionEntry> {
-    await this.dispose(scopeKey);
-    const created = await this.create(scopeKey, scopeLabel);
-    this.sessions.set(this.key(scopeKey), created);
-    return created;
-  }
-
-  async dispose(scopeKey?: string): Promise<boolean> {
-    const key = this.key(scopeKey);
-    const entry = this.sessions.get(key);
-    if (!entry) return false;
-    try {
-      await entry.session.abort().catch(() => {});
-      entry.session.dispose();
-      await this.abort(entry.sessionId);
-    } finally {
-      this.sessions.delete(key);
-    }
-    return true;
-  }
-
-  async disposeAll(): Promise<void> {
-    const keys = [...this.sessions.keys()];
-    await Promise.all(keys.map((key) => this.dispose(key)));
-  }
-}
+const COMPOSER_WEB_TOOLS = ["web_search", "fetch_content", "get_search_content"];
 
 function parseModel(model: string | null): { providerID: string; modelID: string } | null {
   if (!model) return null;
@@ -100,93 +45,16 @@ function parseModel(model: string | null): { providerID: string; modelID: string
   };
 }
 
-function extractText(message: unknown): string {
-  const record = message && typeof message === "object" ? message as { content?: unknown } : {};
-  if (typeof record.content === "string") return record.content.trim();
-  const typedRecord = record as { content?: Array<{ type?: string; text?: string }> };
-  const content = Array.isArray(typedRecord.content) ? typedRecord.content : [];
-  const texts = content
-    .filter((part) => part.type === "text" && typeof part.text === "string")
-    .map((part) => part.text?.trim())
-    .filter(Boolean);
-  return texts.length > 0 ? texts.join("\n\n") : "";
-}
-
-function extractAssistantText(message: unknown): string {
-  const record = message && typeof message === "object" ? message as { role?: string } : {};
-  if (record.role !== "assistant") return "";
-  return extractText(message);
-}
-
-function summarizeExecutionParts(parts: unknown): Array<{ tool: string; status: string; inputChars: number; outputChars: number }> {
-  if (!Array.isArray(parts)) return [];
-  return parts.flatMap((part) => {
-    if (!part || typeof part !== "object") return [];
-    const record = part as Record<string, unknown>;
-    if (record.type !== "tool" && record.type !== "toolCall") return [];
-    const tool = typeof record.tool === "string" ? record.tool.trim() : typeof record.name === "string" ? record.name.trim() : "";
-    const stateRecord = record.state && typeof record.state === "object" ? record.state as Record<string, unknown> : null;
-    const status = stateRecord && typeof stateRecord.status === "string" ? stateRecord.status.trim() : "unknown";
-    const input = stateRecord?.input;
-    const output = stateRecord?.output;
-    return [{
-      tool,
-      status,
-      inputChars: typeof input === "string" ? input.length : JSON.stringify(input || "").length,
-      outputChars: typeof output === "string" ? output.length : JSON.stringify(output || "").length,
-    }];
-  });
-}
-
-function summarizeToolResults(messages: unknown): Array<{ tool: string; status: string; inputChars: number; outputChars: number }> {
-  if (!Array.isArray(messages)) return [];
-  return messages.flatMap((message) => {
-    if (!message || typeof message !== "object") return [];
-    const record = message as Record<string, unknown>;
-    if (record.role !== "toolResult") return [];
-    const content = Array.isArray(record.content) ? record.content : [];
-    const output = content.map((part) => part && typeof part === "object" && (part as Record<string, unknown>).type === "text" ? String((part as Record<string, unknown>).text || "") : "").join("\n");
-    return [{
-      tool: typeof record.toolName === "string" ? record.toolName : "unknown",
-      status: record.isError ? "error" : "completed",
-      inputChars: 0,
-      outputChars: output.length,
-    }];
-  });
-}
-
-function summarizeMessagesForDebug(messages: unknown[]): Array<{ role: string; content: string; partTypes: string[]; textChars: number }> {
-  return messages.map((message) => {
-    const record = message && typeof message === "object" ? message as Record<string, unknown> : {};
-    const content = record.content;
-    const partTypes = Array.isArray(content)
-      ? content.map((part) => part && typeof part === "object" && typeof (part as Record<string, unknown>).type === "string" ? String((part as Record<string, unknown>).type) : typeof part).slice(0, 12)
-      : [];
-    return {
-      role: typeof record.role === "string" ? record.role : "unknown",
-      content: Array.isArray(content) ? "array" : typeof content,
-      partTypes,
-      textChars: extractText(message).length,
-    };
-  });
-}
-
-function ensureNoToolExecution(role: PromptRole | undefined, parts: unknown): void {
-  if (!role || role === "assistant") return;
-  const executionParts = summarizeExecutionParts(parts);
-  if (executionParts.length === 0) return;
-  throw new Error(`${role} text generation must not execute tools`);
-}
-
 export class AiService {
   private config: AppConfig;
   private readonly authStorage: AuthStorage;
   private readonly modelRegistry: ModelRegistry;
   private readonly sessionManager: SessionManager;
-  private readonly sessions: SessionBroker;
+  private readonly sessions: SessionBroker<AgentSession>;
   private readonly replyComposer: ReplyComposer;
   private readonly structuredReasoner: StructuredReasoner;
-  private readonly resourceLoaders = new Map<string, Promise<ResourceBundle>>();
+  private readonly promptTemplates: PromptTemplateRenderer;
+  private readonly sessionFactory: PiSessionFactory;
   private modelRegistryLastRefreshAt = 0;
   private attachmentCapabilityCache: AttachmentCapabilityCache | null = null;
 
@@ -199,10 +67,22 @@ export class AiService {
       (scopeKey, scopeLabel) => this.createSession(scopeKey, scopeLabel, "assistant"),
       async (_sessionId) => {},
     );
+    this.promptTemplates = new PromptTemplateRenderer(() => this.piAgentDir());
+    this.sessionFactory = new PiSessionFactory({
+      config,
+      agentDir: () => this.piAgentDir(),
+      authStorage: this.authStorage,
+      modelRegistry: this.modelRegistry,
+      sessionManager: this.sessionManager,
+      ensureReady: () => this.ensureReady(),
+      selectedModel: () => this.selectedModel(),
+      systemPromptForRole: (role) => this.systemPromptForRole(role),
+    });
     this.replyComposer = new ReplyComposer(
       config,
       (text) => this.promptInLightTextSession(text, "writer"),
       (text) => this.promptInLightTextSession(text, "writer"),
+      (input) => this.renderPromptTemplate("composer", input),
     );
     this.structuredReasoner = new StructuredReasoner(config, (promptText, attachments, scopeKey) => this.promptAssistantTurn(promptText, attachments, scopeKey), (attachments) => this.attachmentLogSummary(attachments));
   }
@@ -215,11 +95,16 @@ export class AiService {
     return path.join(this.agentWorkspaceDir(), ".pi");
   }
 
+  private renderPromptTemplate(name: string, variables: Record<string, unknown>): string {
+    return this.promptTemplates.render(name, variables);
+  }
+
   reloadConfig(config: AppConfig): void {
     this.config = config;
     this.replyComposer.updateConfig(config);
     this.structuredReasoner.updateConfig(config);
-    this.resourceLoaders.clear();
+    this.sessionFactory.updateConfig(config);
+    this.promptTemplates.clear();
     this.stop();
   }
 
@@ -236,72 +121,17 @@ export class AiService {
     await logger.info(`pi sdk ready ms=${Date.now() - startedAt} models=${available.length}`);
   }
 
-  private getResourceLoader(role: PromptRole, useTools: boolean): Promise<ResourceBundle> {
-    const key = `${role}:${useTools ? "tools" : "no-tools"}`;
-    const cached = this.resourceLoaders.get(key);
-    if (cached) return cached;
-
-    const promise = (async () => {
-      const startedAt = Date.now();
-      // Use an in-memory settings manager for bot-created sessions. This keeps
-      // Pi from re-reading/installing package resources on every /new session
-      // while still loading our local agent/.pi resources once per process.
-      const settingsManager = SettingsManager.inMemory({
-        compaction: { enabled: false },
-        retry: { enabled: true, maxRetries: 2 },
-      });
-      const loader = new DefaultResourceLoader({
-        cwd: this.config.paths.repoRoot,
-        agentDir: this.piAgentDir(),
-        settingsManager,
-        systemPromptOverride: () => this.systemPromptForRole(role),
-        appendSystemPromptOverride: () => [],
-        noExtensions: !useTools,
-        noSkills: !useTools,
-        noPromptTemplates: true,
-        noContextFiles: !useTools,
-      });
-      await loader.reload();
-      const extensions = loader.getExtensions().extensions.length;
-      const skills = loader.getSkills().skills.length;
-      await logger.info(`pi sdk resources loaded ms=${Date.now() - startedAt} role=${role} tools=${useTools} extensions=${extensions} skills=${skills}`);
-      return { loader, settingsManager };
-    })().catch((error) => {
-      this.resourceLoaders.delete(key);
-      throw error;
-    });
-
-    this.resourceLoaders.set(key, promise);
-    return promise;
-  }
 
   private selectedModel(): any | undefined {
     const parsed = parseModel(state.model);
     return parsed ? this.modelRegistry.find(parsed.providerID, parsed.modelID) : undefined;
   }
 
-  private async createSession(scopeKey: string | undefined, scopeLabel: string | undefined, role: PromptRole, useTools = role === "assistant"): Promise<SessionEntry> {
-    const startedAt = Date.now();
-    await this.ensureReady();
-    const selected = this.selectedModel();
-    if (state.model && !selected) {
+  private async createSession(scopeKey: string | undefined, scopeLabel: string | undefined, role: PromptRole, useTools = role === "assistant", options: CreateSessionOptions = {}): Promise<SessionEntry> {
+    if (state.model && !this.selectedModel()) {
       throw new Error(`Selected model is unavailable: ${state.model}`);
     }
-    const { loader, settingsManager } = await this.getResourceLoader(role, useTools);
-    const { session } = await createAgentSession({
-      cwd: this.config.paths.repoRoot,
-      agentDir: this.piAgentDir(),
-      authStorage: this.authStorage,
-      modelRegistry: this.modelRegistry,
-      model: selected,
-      resourceLoader: loader,
-      sessionManager: this.sessionManager,
-      settingsManager,
-      noTools: useTools ? undefined : "all",
-    });
-    if (scopeLabel?.trim()) session.setSessionName(scopeLabel.trim());
-    await logger.info(`pi sdk session created ms=${Date.now() - startedAt} scope=${JSON.stringify(scopeKey || "global")} title=${JSON.stringify(scopeLabel?.trim() || "")} role=${role} tools=${useTools}`);
-    return { sessionId: session.sessionId, session };
+    return this.sessionFactory.createSession(scopeKey, scopeLabel, role, useTools, options);
   }
 
   private async getOrCreateSession(scopeKey?: string, scopeLabel?: string): Promise<SessionEntry> {
@@ -390,20 +220,31 @@ export class AiService {
   async generateScheduledTaskContent(prompt: string): Promise<string> {
     const taskPrompt = prompt.trim();
     if (!taskPrompt) return "";
-    const request = [
-      "Generate fresh, useful content for this recurring automated task.",
-      "Use tools when needed to gather current external information before writing the final message.",
-      `Task prompt: ${taskPrompt}`,
-    ].join("\n");
-    return this.promptInDisposableAgentTextSession(request, "assistant");
+    const request = this.renderPromptTemplate("composer", {
+      task: "scheduled-content",
+      context: [
+        "Generate fresh, useful content for this recurring automated task.",
+        "Use web access when needed to gather current external information before writing the final message.",
+        `Task prompt: ${taskPrompt}`,
+      ].join("\n"),
+      language: this.config.bot.language,
+      style: this.config.bot.personaStyle?.trim() || "default",
+      capabilities: "web: true\nstateMutation: false\ntelegramDelivery: false\nrepoTools: false",
+    });
+    return this.promptInDisposableComposerWebSession(request);
   }
 
-  async composeUserReply(baseMessage: string | null | undefined, facts: string[], input?: ReplyComposerInputContext): Promise<string> {
-    return this.replyComposer.composeUserReply(baseMessage, facts, input);
+  async composeMaintenanceReport(facts: string[], input?: ReplyComposerInputContext): Promise<string> {
+    return this.replyComposer.composeMaintenanceReport(facts, input);
   }
 
   async runMaintenancePass(request: string): Promise<string> {
-    return (await this.promptInTemporaryTextSession(request, "maintainer")).trim();
+    const rendered = this.renderPromptTemplate("maintainer", {
+      context: request.trim(),
+      language: this.config.bot.language,
+      style: this.config.bot.personaStyle?.trim() || "default",
+    });
+    return (await this.promptInTemporaryTextSession(rendered, "maintainer")).trim();
   }
 
   async runAssistantTurn(input: {
@@ -527,13 +368,18 @@ export class AiService {
     });
   }
 
-  private async promptInDisposableAgentTextSession(text: string, role: "assistant"): Promise<string> {
+  private async promptInDisposableComposerWebSession(text: string): Promise<string> {
     return this.promptInDisposableTextSession({
-      title: "Assistant",
-      role,
+      title: "Composer web",
+      role: "writer",
       useTools: true,
-      requestLog: `pi sdk ${role} text prompt request`,
-      rawLogLabel: `pi sdk ${role} text prompt`,
+      sessionOptions: {
+        noContextFiles: true,
+        noSkills: true,
+        toolAllowlist: COMPOSER_WEB_TOOLS,
+      },
+      requestLog: "pi sdk composer web prompt request",
+      rawLogLabel: "pi sdk composer web prompt",
       execute: async (session) => {
         for (let attempt = 1; attempt <= 2; attempt += 1) {
           const attemptText = attempt === 1
@@ -542,14 +388,16 @@ export class AiService {
                 text,
                 "",
                 "Your previous output was invalid.",
-                "Use the needed tools, then return only plain user-visible text in the configured persona.",
+                "Return only plain user-visible text. Do not claim state changes or delivery.",
               ].join("\n");
-          const response = await this.promptSessionForAgent(session, attemptText, [], role);
+          const response = await this.promptSessionForAgent(session, attemptText, [], "assistant");
           const rawText = response.rawText.trim();
+          const forbiddenActions = response.completedActions.filter((name) => !COMPOSER_WEB_TOOLS.includes(name));
+          if (forbiddenActions.length > 0) throw new Error(`composer web session executed forbidden tools: ${forbiddenActions.join(", ")}`);
           if (rawText && isDisplayableUserText(rawText)) return rawText;
-          await logger.warn(`discarded ${role} output attempt=${attempt} reason=${rawText ? "non-displayable" : "empty-output"}`);
+          await logger.warn(`discarded composer web output attempt=${attempt} reason=${rawText ? "non-displayable" : "empty-output"}`);
         }
-        throw new Error(`${role} output protocol violation: invalid text result.`);
+        throw new Error("composer web output protocol violation: invalid text result.");
       },
     });
   }
@@ -578,11 +426,12 @@ export class AiService {
     title: string;
     role: PromptRole;
     useTools: boolean;
+    sessionOptions?: CreateSessionOptions;
     requestLog: string;
     rawLogLabel: string;
     execute: (session: AgentSession) => Promise<string>;
   }): Promise<string> {
-    const session = await this.createSession(undefined, input.title, input.role, input.useTools);
+    const session = await this.createSession(undefined, input.title, input.role, input.useTools, input.sessionOptions);
     try {
       await logger.info(input.requestLog);
       const rawText = await input.execute(session.session);

@@ -24,7 +24,7 @@ type FakeMessage = { role: string; content?: Array<{ type: string; text?: string
 
 function installFakePiSession(service: any, responses: FakeMessage[], calls: any[] = [], toolNames: string[] = []): void {
   service.ensureReady = async () => {};
-  service.createSession = async (_scopeKey: string | undefined, scopeLabel: string | undefined, role: string, useTools = role === "assistant") => {
+  service.createSession = async (_scopeKey: string | undefined, scopeLabel: string | undefined, role: string, useTools = role === "assistant", options?: any) => {
     const listeners: Array<(event: any) => void> = [];
     const session: any = {
       sessionId: `ses_${role}_${calls.length}`,
@@ -38,7 +38,7 @@ function installFakePiSession(service: any, responses: FakeMessage[], calls: any
         };
       },
       prompt: async (text: string) => {
-        calls.push({ text, role, useTools, scopeLabel });
+        calls.push({ text, role, useTools, scopeLabel, options });
         session.messages.push({ role: "user", content: text, timestamp: Date.now() });
         for (const toolName of toolNames) {
           for (const listener of listeners) listener({ type: "tool_execution_end", toolName, isError: false });
@@ -54,7 +54,7 @@ function installFakePiSession(service: any, responses: FakeMessage[], calls: any
 
 function installFakePiSessionWithUserEchoAfterAssistant(service: any, calls: any[] = []): void {
   service.ensureReady = async () => {};
-  service.createSession = async (_scopeKey: string | undefined, scopeLabel: string | undefined, role: string, useTools = role === "assistant") => {
+  service.createSession = async (_scopeKey: string | undefined, scopeLabel: string | undefined, role: string, useTools = role === "assistant", options?: any) => {
     const listeners: Array<(event: any) => void> = [];
     const session: any = {
       sessionId: `ses_${role}_${calls.length}`,
@@ -65,7 +65,7 @@ function installFakePiSessionWithUserEchoAfterAssistant(service: any, calls: any
         return () => {};
       },
       prompt: async (text: string) => {
-        calls.push({ text, role, useTools, scopeLabel });
+        calls.push({ text, role, useTools, scopeLabel, options });
         session.messages.push({ role: "assistant", content: [{ type: "text", text: "启动完成。" }] });
         session.messages.push({ role: "user", content: [{ type: "text", text }] });
       },
@@ -90,16 +90,18 @@ describe("gateway execution history", () => {
     expect(calls[0].text).toContain("Scheduled message delivery local time: 2026-04-12 17:00:00 (Asia/Tokyo).");
   });
 
-  test("automation content generation uses the assistant build lane instead of writer mode", async () => {
+  test("automation content generation uses composer web mode with only web tools", async () => {
     const service = new AiService(createTestConfig()) as any;
     const calls: any[] = [];
     installFakePiSession(service, [{ role: "assistant", content: [{ type: "text", text: "今日要闻：……" }] }], calls, ["web_search"]);
 
     const result = await service.generateScheduledTaskContent("生成一段每日简报");
     expect(result).toBe("今日要闻：……");
-    expect(calls[0].role).toBe("assistant");
+    expect(calls[0].role).toBe("writer");
     expect(calls[0].useTools).toBe(true);
+    expect(calls[0].options).toMatchObject({ noContextFiles: true, noSkills: true, toolAllowlist: ["web_search", "fetch_content", "get_search_content"] });
     expect(calls[0].text).toContain("Generate fresh, useful content");
+    expect(calls[0].text).toContain("Task: scheduled-content");
   });
 
   test("startup greeting and other reply-composer text generation methods use writer mode", async () => {
@@ -108,7 +110,7 @@ describe("gateway execution history", () => {
     installFakePiSession(service, [{ role: "assistant", content: [{ type: "text", text: "好的。" }] }], calls);
 
     await service.generateStartupGreeting({ requesterUserId: 1 });
-    await service.composeUserReply("草稿", ["事实1"], { requesterUserId: 1, chatId: 1, chatType: "private" });
+    await service.composeMaintenanceReport(["事实1"], { requesterUserId: 1, chatId: 1, chatType: "private" });
 
     expect(calls.length).toBe(2);
     for (const call of calls) {

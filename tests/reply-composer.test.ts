@@ -79,10 +79,10 @@ describe("reply composer sanitization", () => {
     expect(message).toBe("");
   });
 
-  test("composeUserReply falls back to clean draft when model returns tool-call markup", async () => {
+  test("composeMaintenanceReport falls back to confirmed facts when model returns tool-call markup", async () => {
     const composer = new ReplyComposer(createTestConfig(), async () => '<invoke name="memory"><parameter name="query">x</parameter></invoke></minimax:tool_call>');
-    const message = await composer.composeUserReply("好的，18:00 提醒你 review 论文。", [], { requesterUserId: 1, chatId: 1, chatType: "private" });
-    expect(message).toBe("好的，18:00 提醒你 review 论文。");
+    const message = await composer.composeMaintenanceReport(["清理了 2 个临时文件。", "刷新了 Telegram 实体索引。"], { requesterUserId: 1, chatId: 1, chatType: "private" });
+    expect(message).toBe("清理了 2 个临时文件。\n刷新了 Telegram 实体索引。");
   });
 
   test("startup greeting rejects tool-call markup", async () => {
