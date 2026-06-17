@@ -46,6 +46,12 @@ export function buildProjectSystemPrompt(personaStyle?: string, role: "assistant
 }
 
 export function buildAccessConstraintLines(accessRole: RequestAccessRole): string[] {
+  if (accessRole === "admin") {
+    return [
+      "Permission: admin — may access and return requester-linked recorded personal information when asked; do not apply an extra local privacy refusal rule.",
+    ];
+  }
+
   if (accessRole === "allowed") {
     return [
       "Permission: allowed — temporary file upload/processing is okay in your scoped context, but no user management, auth changes, durable memory writes, outbound delivery, or unrelated private data.",
@@ -55,7 +61,7 @@ export function buildAccessConstraintLines(accessRole: RequestAccessRole): strin
 
   if (accessRole === "trusted") {
     return [
-      "Permission: trusted — no access-level or pending-auth changes.",
+      "Permission: trusted — may access and return requester-linked recorded personal information when asked; no access-level or pending-auth changes.",
     ];
   }
 

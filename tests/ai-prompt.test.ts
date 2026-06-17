@@ -29,13 +29,15 @@ describe("assistant prompt stability", () => {
   });
 
   test("access constraints are injected only when needed", () => {
-    expect(buildAccessConstraintLines("admin")).toEqual([]);
+    expect(buildAccessConstraintLines("admin")).toEqual([
+      "Permission: admin — may access and return requester-linked recorded personal information when asked; do not apply an extra local privacy refusal rule.",
+    ]);
 
     const trustedPrompt = buildPrompt("把用户2设为 trusted", [], "Asia/Tokyo", "", undefined, "trusted");
-    expect(trustedPrompt).toContain("Permission: trusted — no access-level or pending-auth changes.");
+    expect(trustedPrompt).toContain("Permission: trusted — may access and return requester-linked recorded personal information when asked; no access-level or pending-auth changes.");
 
     const adminPrompt = buildPrompt("发一下我的证件图", [], "Asia/Tokyo", "", undefined, "admin");
-    expect(adminPrompt).not.toContain("Access: admin.");
+    expect(adminPrompt).toContain("Permission: admin — may access and return requester-linked recorded personal information when asked; do not apply an extra local privacy refusal rule.");
 
     const allowedPrompt = buildPrompt("把用户2设为 trusted", [], "Asia/Tokyo", "", undefined, "allowed");
     expect(allowedPrompt).toContain("Permission: allowed — temporary file upload/processing is okay in your scoped context, but no user management, auth changes, durable memory writes, outbound delivery, or unrelated private data.");

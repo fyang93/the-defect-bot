@@ -6,7 +6,6 @@ default:
 
 alias i := install
 alias s := serve
-alias a := agent
 
 # Install project dependencies.
 install:
@@ -16,13 +15,6 @@ install:
 serve:
     mkdir -p logs; \
     npm run bot
-
-# Open a Pi interactive session using this repository's agent workspace.
-agent:
-    mkdir -p agent/.pi/sessions; \
-    PI_CODING_AGENT_DIR="$PWD/agent/.pi" \
-    PI_CODING_AGENT_SESSION_DIR="$PWD/agent/.pi/sessions" \
-    pi --name "Defect Bot assistant"
 
 # Run manual test suite, including live natural-language tests.
 test:

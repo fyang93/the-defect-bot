@@ -2,5 +2,7 @@
   "defaultThinkingLevel": "medium",
   "packages": [
     "npm:pi-web-access"
-  ]
+  ],
+  "lastChangelogVersion": "0.79.4",
+  "theme": "dark"
 }
