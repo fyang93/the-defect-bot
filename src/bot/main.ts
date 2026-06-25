@@ -244,6 +244,7 @@ async function runPostPollingStartupTasks(): Promise<void> {
   await syncBotCommandsSafe("startup");
   await logger.info("startup phase: ensure usable startup model");
   await lifecycle.ensureUsableStartupModel();
+  await lifecycle.warmAssistantResources();
   await logger.info("startup phase: prune inactive schedules");
   const inactiveScheduleCleanup = await scheduleEngine.prune();
   if (inactiveScheduleCleanup.removed > 0) {

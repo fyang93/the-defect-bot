@@ -39,6 +39,15 @@ export function createBotLifecycle(input: {
     }
   }
 
+  async function warmAssistantResources(): Promise<void> {
+    try {
+      await logger.info("startup phase: warm assistant resources");
+      await agentService.warmAssistantResources();
+    } catch (error) {
+      await logger.warn(`failed to warm assistant resources: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   async function sendStartupGreeting(): Promise<void> {
     try {
       const adminUserId = config.telegram.adminUserId;
@@ -114,6 +123,7 @@ export function createBotLifecycle(input: {
   return {
     sendAdminMessage,
     ensureUsableStartupModel,
+    warmAssistantResources,
     sendStartupGreeting,
     createMaintainerRunnerWithNotifications,
     openModelPicker,

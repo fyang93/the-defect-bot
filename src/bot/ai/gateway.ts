@@ -133,6 +133,12 @@ export class AiService {
     await logger.info(`pi sdk ready ms=${Date.now() - startedAt} models=${available.length}`);
   }
 
+  async warmAssistantResources(): Promise<void> {
+    const entry = await this.createSession(undefined, "Warm assistant resources", "assistant", true);
+    await entry.session.abort().catch(() => {});
+    entry.session.dispose();
+    await logger.info("pi sdk assistant resources warmed");
+  }
 
   private selectedModel(): any | undefined {
     const parsed = parseModel(state.model);
