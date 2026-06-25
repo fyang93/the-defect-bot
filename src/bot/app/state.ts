@@ -164,6 +164,19 @@ export async function loadPersistentState(filePath: string): Promise<void> {
   hydrateKnownEntities(repoRootFromStateFile(filePath));
 }
 
+export async function reloadPendingAuthorizations(filePath: string): Promise<void> {
+  persistentStateFilePath = filePath;
+  try {
+    const loadedRaw = await readFile(filePath, "utf8");
+    const parsed = JSON.parse(loadedRaw) as { pendingAuthorizations?: unknown };
+    state.pendingAuthorizations = Array.isArray(parsed.pendingAuthorizations)
+      ? parsed.pendingAuthorizations.map(normalizePendingAuthorization).filter((item): item is PendingAuthorization => Boolean(item))
+      : [];
+  } catch {
+    state.pendingAuthorizations = [];
+  }
+}
+
 export async function persistState(filePath: string): Promise<void> {
   persistentStateFilePath = filePath;
   await mkdir(path.dirname(filePath), { recursive: true });

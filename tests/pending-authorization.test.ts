@@ -172,6 +172,22 @@ describe("pending authorization: user messages bot → access granted → persis
     expect(accessAfter).toBe("allowed");
   });
 
+
+  test("matching username grants even when pending authorization was written by another tool context", async () => {
+    const config = await createTempConfig();
+    const futureExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    await writeFile(config.paths.stateFile, JSON.stringify({
+      pendingAuthorizations: [{ kind: "allowed", username: "external_user", createdBy: 1, createdAt: new Date().toISOString(), expiresAt: futureExpiry }],
+    }, null, 2), "utf8");
+    state.pendingAuthorizations = [];
+
+    const granted = await grantPendingAllowedAccessIfMatched(config, { id: 501, username: "external_user" });
+
+    expect(granted.granted).toBe(true);
+    expect(accessLevelForUser(config, 501)).toBe("allowed");
+    expect(state.pendingAuthorizations.length).toBe(0);
+  });
+
   test("non-matching username does not grant access", async () => {
     const config = await createTempConfig();
     const futureExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();

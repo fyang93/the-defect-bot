@@ -1,7 +1,7 @@
 import type { AppConfig } from "bot/app/types";
 import type { RequestAccessRole } from "bot/ai/prompt";
 import type { PendingAuthorizationDraft } from "bot/ai/types";
-import { persistState, rememberPendingAuthorization, consumePendingAllowedAuthorization, pruneExpiredPendingAuthorizations } from "bot/app/state";
+import { persistState, rememberPendingAuthorization, consumePendingAllowedAuthorization, pruneExpiredPendingAuthorizations, reloadPendingAuthorizations } from "bot/app/state";
 import { hasAccessLevel } from "bot/operations/access/control";
 import { setStoredUserAccessLevel } from "bot/operations/access/roles";
 
@@ -46,6 +46,7 @@ export async function storePendingAuthorizations(
 export async function grantPendingAllowedAccessIfMatched(config: AppConfig, user: { id?: number; username?: string } | null | undefined): Promise<{ granted: boolean; username?: string; changed?: boolean }> {
   const userId = typeof user?.id === "number" ? user.id : undefined;
   if (!userId) return { granted: false };
+  await reloadPendingAuthorizations(config.paths.stateFile);
   const granted = consumePendingAllowedAuthorization(user?.username);
   if (!granted) return { granted: false };
   const changed = await setStoredUserAccessLevel(config, userId, "allowed", {
