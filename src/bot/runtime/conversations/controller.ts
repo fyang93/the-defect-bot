@@ -137,15 +137,50 @@ export class ConversationController {
   private readonly feedback;
   private readonly mediaGroups = new Map<string, MediaGroupCacheEntry>();
   private readonly turns = new Map<string, ConversationTurnSlot>();
+  private readonly waitingTimers = new Map<string, ReturnType<typeof setInterval>>();
 
   constructor(private readonly deps: ConversationControllerDeps) {
     this.feedback = new CosmeticTelegramFeedback(this.deps.bot);
     this.activeTasks = new ActiveConversationTasks(
       this.deps.bot,
       this.deps.agentService,
-      () => {},
+      (task) => this.stopWaitingRotation(task),
       (chatId, messageId, emoji) => this.feedback.setReactionByMessageSafe(chatId, messageId, emoji),
     );
+  }
+
+  private waitingTimerKey(task: ActiveConversationTask): string {
+    return `${task.scopeKey}:${task.id}`;
+  }
+
+  private stopWaitingRotation(task: ActiveConversationTask): void {
+    const key = this.waitingTimerKey(task);
+    const timer = this.waitingTimers.get(key);
+    if (timer) clearInterval(timer);
+    this.waitingTimers.delete(key);
+  }
+
+  private startWaitingRotation(ctx: Context, task: ActiveConversationTask, template: string): void {
+    if (typeof task.waitingMessageId !== "number") return;
+    const messages = this.deps.config.telegram.waitingMessages?.length
+      ? this.deps.config.telegram.waitingMessages
+      : (this.deps.config.telegram.waitingMessage ? [this.deps.config.telegram.waitingMessage] : []);
+    const intervalMs = (this.deps.config.telegram.waitingMessageRotationSeconds ?? 5) * 1000;
+    if (messages.length < 2 || intervalMs <= 0) return;
+
+    let index = 1;
+    const timer = setInterval(() => {
+      if (!this.activeTasks.isCurrent(task.scopeKey, task.id) || task.cancelled) {
+        this.stopWaitingRotation(task);
+        return;
+      }
+      const text = renderWaitingMessage(template, messages[index % messages.length]);
+      index += 1;
+      void this.feedback.editMessageTextFormattedSafe(ctx, task.chatId, task.waitingMessageId!, text).catch(async (error) => {
+        await logger.warn(`waiting message rotation failed chat=${task.chatId} message=${task.waitingMessageId}: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }, intervalMs);
+    this.waitingTimers.set(this.waitingTimerKey(task), timer);
   }
 
   hasActiveTask(): boolean {
@@ -566,10 +601,9 @@ export class ConversationController {
     }
 
     await this.setReactionSafe(ctx, "🤔");
-    const waitingMessages = this.deps.config.telegram.waitingMessages;
-    const initialWaitingMessage = waitingMessages[0] || "";
-    const waiting = initialWaitingMessage
-      ? await this.feedback.sendWaitingMessageSafe(ctx, renderWaitingMessage(slot.input.waitingTemplate, initialWaitingMessage))
+    const waitingMessages = this.deps.config.telegram.waitingMessages?.length ? this.deps.config.telegram.waitingMessages : (this.deps.config.telegram.waitingMessage ? [this.deps.config.telegram.waitingMessage] : []);
+    const waiting = waitingMessages[0]
+      ? await this.feedback.sendWaitingMessageSafe(ctx, renderWaitingMessage(slot.input.waitingTemplate, waitingMessages[0]))
       : null;
 
     const latest = this.turns.get(scopeKey);
@@ -590,24 +624,8 @@ export class ConversationController {
       waitingMessageId: waiting?.message_id,
       cancelled: false,
     };
+    this.startWaitingRotation(ctx, task, latest.input.waitingTemplate);
     this.activeTasks.set(scopeKey, task);
-    let waitingRotationTimer: ReturnType<typeof setInterval> | undefined;
-    if (waiting?.message_id && waitingMessages.length > 1) {
-      let waitingMessageIndex = 0;
-      waitingRotationTimer = setInterval(() => {
-        if (!this.activeTasks.isCurrent(scopeKey, taskId)) {
-          if (waitingRotationTimer) clearInterval(waitingRotationTimer);
-          return;
-        }
-        waitingMessageIndex = (waitingMessageIndex + 1) % waitingMessages.length;
-        void this.feedback.editWaitingMessageSafe(
-          ctx,
-          chatId,
-          waiting.message_id!,
-          renderWaitingMessage(slot.input.waitingTemplate, waitingMessages[waitingMessageIndex]),
-        );
-      }, this.deps.config.telegram.waitingMessageRotationSeconds * 1000);
-    }
     this.turns.set(scopeKey, {
       ...latest,
       phase: "running",
@@ -626,9 +644,7 @@ export class ConversationController {
         agentService: this.deps.agentService,
         isTaskCurrent: (taskScopeKey, currentTaskId) => this.activeTasks.isCurrent(taskScopeKey, currentTaskId),
         onPruneRecentUploads: (taskScopeKey) => pruneRecentUploads(taskScopeKey),
-        onStopWaiting: () => {
-          if (waitingRotationTimer) clearInterval(waitingRotationTimer);
-        },
+        onStopWaiting: (waitingTask) => this.stopWaitingRotation(waitingTask),
         onSetReaction: (reactionCtx, emoji) => this.setReactionSafe(reactionCtx, emoji),
         onReleaseActiveTask: (taskScopeKey, currentTaskId) => {
           this.activeTasks.deleteIfCurrent(taskScopeKey, currentTaskId);
@@ -636,8 +652,8 @@ export class ConversationController {
         },
       });
     } finally {
+      this.stopWaitingRotation(task);
       this.activeTasks.deleteIfCurrent(scopeKey, task.id);
-      if (waitingRotationTimer) clearInterval(waitingRotationTimer);
       this.clearTurnIfCurrent(scopeKey, task.id);
     }
   }

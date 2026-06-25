@@ -11,6 +11,8 @@ const DELIVERY_RETRY_DELAY_MS = 30_000;
 const PREPARATION_RETRY_DELAY_MS = 10 * 60_000;
 const SAFETY_SWEEP_INTERVAL_MS = 10 * 60_000;
 const PERIODIC_PREPARE_WINDOW_MS = 24 * 60 * 60_000;
+const EXTERNAL_SCHEDULE_RESCAN_INTERVAL_MS = 5_000;
+const EXTERNAL_SCHEDULE_POLL_REASON = "external schedule poll";
 
 export type ScheduleLoopHandle = {
   stop(): void;
@@ -63,6 +65,7 @@ export class ScheduleCoordinator implements ScheduleLoopHandle {
   private deliveryTimer: NodeJS.Timeout | null = null;
   private preparationTimer: NodeJS.Timeout | null = null;
   private safetySweepTimer: NodeJS.Timeout | null = null;
+  private externalRescanTimer: NodeJS.Timeout | null = null;
   private running = false;
   private stopped = false;
   private rescheduleRequested = false;
@@ -89,6 +92,9 @@ export class ScheduleCoordinator implements ScheduleLoopHandle {
         }
       });
     }, SAFETY_SWEEP_INTERVAL_MS);
+    this.externalRescanTimer = setInterval(() => {
+      this.requestReschedule(EXTERNAL_SCHEDULE_POLL_REASON);
+    }, EXTERNAL_SCHEDULE_RESCAN_INTERVAL_MS);
   }
 
   stop(): void {
@@ -96,6 +102,8 @@ export class ScheduleCoordinator implements ScheduleLoopHandle {
     this.clearTimers();
     if (this.safetySweepTimer) clearInterval(this.safetySweepTimer);
     this.safetySweepTimer = null;
+    if (this.externalRescanTimer) clearInterval(this.externalRescanTimer);
+    this.externalRescanTimer = null;
   }
 
   requestReschedule(reason = "unspecified"): void {
@@ -146,7 +154,7 @@ export class ScheduleCoordinator implements ScheduleLoopHandle {
       }, delay);
     }
 
-    await logger.info(`schedule coordinator armed reason=${JSON.stringify(reason)} nextDeliveryAt=${deliveryAt ? new Date(deliveryAt).toISOString() : "none"} nextPreparationAt=${preparationAt ? new Date(preparationAt).toISOString() : "none"}`);
+    if (reason !== EXTERNAL_SCHEDULE_POLL_REASON) await logger.info(`schedule coordinator armed reason=${JSON.stringify(reason)} nextDeliveryAt=${deliveryAt ? new Date(deliveryAt).toISOString() : "none"} nextPreparationAt=${preparationAt ? new Date(preparationAt).toISOString() : "none"}`);
   }
 
   private async runExclusive(label: string, work: () => Promise<void>): Promise<void> {

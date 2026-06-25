@@ -2,8 +2,9 @@ export type AppConfig = {
   telegram: {
     botToken: string;
     adminUserId: number | null;
-    waitingMessages: string[];
-    waitingMessageRotationSeconds: number;
+    waitingMessage: string;
+    waitingMessages?: string[];
+    waitingMessageRotationSeconds?: number;
     inputMergeWindowSeconds: number;
     menuPageSize: number;
   };

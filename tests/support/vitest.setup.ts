@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 
 const require = createRequire(import.meta.url);
 const tsconfigPath = require.resolve("../../tsconfig.json");
-const tsxRunnerPath = require.resolve("tsx/" + "c" + "li");
+const tsxCliPath = require.resolve("tsx/cli");
 
 type BunSpawnOptions = {
   cwd?: string;
@@ -27,11 +27,11 @@ function normalizeCommand(cmd: string[]): string[] {
   if (cmd[0] !== "bun") return cmd;
 
   if (cmd[1] === "run" && cmd[2]?.endsWith(".ts")) {
-    return [process.execPath, tsxRunnerPath, "--tsconfig", tsconfigPath, cmd[2], ...cmd.slice(3)];
+    return [process.execPath, tsxCliPath, "--tsconfig", tsconfigPath, cmd[2], ...cmd.slice(3)];
   }
 
   if (cmd[1]?.endsWith(".ts")) {
-    return [process.execPath, tsxRunnerPath, "--tsconfig", tsconfigPath, cmd[1], ...cmd.slice(2)];
+    return [process.execPath, tsxCliPath, "--tsconfig", tsconfigPath, cmd[1], ...cmd.slice(2)];
   }
 
   return ["npm", ...cmd.slice(1)];

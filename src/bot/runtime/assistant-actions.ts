@@ -34,11 +34,19 @@ export type ExecuteAssistantActionsInput = {
   onProgress?: AssistantProgressHandler;
 };
 
+function looksLikeOutboundTelegramRequest(text: string): boolean {
+  return /(?:给|向).{1,40}(?:发|发送|打个?招呼|问候|告诉|转发)|(?:send|message|tell|greet)\s+.{1,40}/i.test(text);
+}
+
+function outboundRetryPrompt(text: string): string {
+  return `${text}\n\nSystem correction: this is an outbound Telegram delivery request. Use telegram_list_recipients with a query, then telegram_send_message. Do not reply as the recipient in the current chat; if the recipient list is empty or ambiguous, report that result.`;
+}
+
 export async function executeAssistantActions(input: ExecuteAssistantActionsInput): Promise<AssistantTurnResult> {
   const assistantStartedAt = Date.now();
   const taskStillCurrent = () => (input.isTaskCurrent ? input.isTaskCurrent() : true);
 
-  const planned = await input.agentService.runAssistantTurn({
+  let planned = await input.agentService.runAssistantTurn({
     userRequestText: input.userRequestText,
     requesterUserId: input.requesterUserId,
     chatId: input.ctx.chat?.id,
@@ -54,6 +62,26 @@ export async function executeAssistantActions(input: ExecuteAssistantActionsInpu
     isTaskCurrent: taskStillCurrent,
     onProgress: input.onProgress,
   });
+
+  if (taskStillCurrent() && input.canDeliverOutbound && !planned.usedNativeExecution && looksLikeOutboundTelegramRequest(input.userRequestText)) {
+    await logger.warn("assistant outbound delivery request completed without tool use; retrying with explicit delivery instruction");
+    planned = await input.agentService.runAssistantTurn({
+      userRequestText: outboundRetryPrompt(input.userRequestText),
+      requesterUserId: input.requesterUserId,
+      chatId: input.ctx.chat?.id,
+      chatType: input.ctx.chat?.type,
+      accessRole: input.accessRole,
+      uploadedFiles: input.uploadedFiles || [],
+      attachments: input.attachments || [],
+      messageTime: input.messageTime,
+      requesterTimezone: input.requesterTimezone,
+      sharedConversationContextText: input.sharedConversationContextText,
+      scopeKey: input.scopeKey,
+      scopeLabel: input.scopeLabel,
+      isTaskCurrent: taskStillCurrent,
+      onProgress: input.onProgress,
+    });
+  }
 
   if (!taskStillCurrent()) {
     await logger.warn("assistant agent result ignored because task is stale");

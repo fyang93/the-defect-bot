@@ -29,8 +29,7 @@ function createTestConfig(repoRoot: string): AppConfig {
     telegram: {
       botToken: "test",
       adminUserId: 1,
-      waitingMessages: [],
-      waitingMessageRotationSeconds: 5,
+      waitingMessage: "",
       inputMergeWindowSeconds: 3,
       menuPageSize: 10,
     },
@@ -55,7 +54,7 @@ function createTestConfig(repoRoot: string): AppConfig {
 }
 
 async function createTempEnv(): Promise<{ config: AppConfig; repoRoot: string }> {
-  // Use the real project root so Pi SDK tools can find repository state and extension tools.
+  // Use the real project root so Pi SDK tools can find repository CLI aliases.
   // System files are backed up and restored after the test.
   const repoRoot = hostRepoRoot;
   await mkdir(path.join(repoRoot, "system"), { recursive: true });

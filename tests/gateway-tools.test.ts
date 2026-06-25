@@ -7,8 +7,7 @@ import { AiService } from "../src/bot/ai";
 function createTestConfig(): AppConfig {
   const repoRoot = path.join(os.tmpdir(), "defect-bot-gateway-tools-test");
   return {
-    telegram: { botToken: "test", adminUserId: 1, waitingMessages: [],
-      waitingMessageRotationSeconds: 5, inputMergeWindowSeconds: 3, menuPageSize: 10 },
+    telegram: { botToken: "test", adminUserId: 1, waitingMessage: "", inputMergeWindowSeconds: 3, menuPageSize: 10 },
     bot: { personaStyle: "模仿杀戮尖塔里的故障机器人说话。", language: "zh-CN", defaultTimezone: "Asia/Tokyo" },
     paths: {
       repoRoot,
@@ -144,25 +143,5 @@ describe("gateway execution history", () => {
     const result = await service.promptSessionForAssistant(entry.session, "创建提醒：明天下午3点开会", []);
     expect(result.usedNativeExecution).toBe(true);
     expect(result.completedActions).toEqual(["telegram:send-message", "events:create"]);
-  });
-
-
-  test("assistant refuses claimed reminder deletion without a tool event", async () => {
-    const service = new AiService(createTestConfig()) as any;
-    const calls: any[] = [];
-    installFakePiSession(service, [{ role: "assistant", content: [{ type: "text", text: "已处理，明日组会已被删除。" }] }], calls);
-
-    const result = await service.runAssistantTurn({
-      userRequestText: "删除明日组会",
-      requesterUserId: 1,
-      accessRole: "admin",
-      uploadedFiles: [],
-      attachments: [],
-      ctx: { chat: { id: 1, type: "private" } },
-    });
-
-    expect(calls.length).toBe(2);
-    expect(result.usedNativeExecution).toBe(false);
-    expect(result.message).toContain("没有实际完成");
   });
 });

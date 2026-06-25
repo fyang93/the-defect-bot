@@ -21,7 +21,7 @@ const logFile = path.join(hostRepoRoot, "logs", "test-runs", "live-assistant.log
 
 function createTestConfig(): AppConfig {
   return {
-    telegram: { botToken: "test", adminUserId: 1, waitingMessages: [], waitingMessageRotationSeconds: 5, inputMergeWindowSeconds: 3, menuPageSize: 10 },
+    telegram: { botToken: "test", adminUserId: 1, waitingMessage: "", inputMergeWindowSeconds: 3, menuPageSize: 10 },
     bot: { personaStyle: "", language: "zh", defaultTimezone: "Asia/Tokyo" },
     paths: { repoRoot: hostRepoRoot, tmpDir: path.join(hostRepoRoot, "tmp"), uploadSubdir: "uploads", logFile: path.join(hostRepoRoot, "logs", "bot.log"), stateFile: path.join(hostRepoRoot, "system", "runtime-state.json") },
     maintenance: { enabled: false, idleAfterMs: 0, tmpRetentionDays: 1 },

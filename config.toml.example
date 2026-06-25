@@ -2,7 +2,8 @@
 bot_token = "YOUR_TELEGRAM_BOT_TOKEN"
 # Bootstrap admin user. Durable user roles live in system/users.json.
 admin_user_id = 333333333
-waiting_messages = ["机宝启动中..."]
+waiting_message = "机宝启动中..."
+waiting_message_candidate_count = 20
 waiting_message_rotation_seconds = 5
 input_merge_window_seconds = 3
 menu_page_size = 8

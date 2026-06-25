@@ -17,6 +17,7 @@ export function invalidateContextStoreCache(filePath?: string): void {
 export type UserRecord = {
   username?: string;
   displayName?: string;
+  aliases?: string[];
   personPath?: string;
   accessLevel?: "admin" | "allowed" | "trusted";
   timezone?: string;
@@ -80,6 +81,7 @@ export function loadUsers(repoRoot: string, options?: { defaultTimezone?: string
       return [userId, {
         username: cleanText(record.username),
         displayName: cleanText(record.displayName),
+        aliases: cleanStringList(record.aliases),
         personPath: cleanText(record.personPath) || cleanText(record.memoryPath),
         accessLevel: record.accessLevel === "admin" || record.accessLevel === "allowed" || record.accessLevel === "trusted"
           ? record.accessLevel
@@ -145,6 +147,16 @@ export function resolveUserByUsername(repoRoot: string, username: string | undef
   });
 }
 
+export function resolveUserByAlias(repoRoot: string, alias: string | undefined): [string, UserRecord] | undefined {
+  const cleaned = cleanText(alias);
+  const normalized = cleaned ? normalizeLookupKey(cleaned) : undefined;
+  if (!normalized) return undefined;
+  return resolveUniqueUserMatch(repoRoot, (user) => {
+    const keys = new Set((user.aliases || []).map(normalizeLookupKey));
+    return keys.has(normalized);
+  });
+}
+
 export function resolveUserByDisplayName(repoRoot: string, displayName: string | undefined): [string, UserRecord] | undefined {
   const cleaned = cleanText(displayName);
   const normalized = cleaned ? normalizeLookupKey(cleaned) : undefined;
@@ -159,7 +171,9 @@ export function resolveChat(repoRoot: string, chatId: number | string | undefine
 
 export function resolveUserDisplayName(repoRoot: string, userId: number | string | undefined): string | undefined {
   const user = resolveUser(repoRoot, userId);
+  if (user?.aliases?.[0]) return user.aliases[0];
   if (user?.displayName) return user.displayName;
+  if (user?.username) return `@${user.username}`;
   if (userId != null) {
     const runtime = state.telegramUserCache[String(userId)];
     if (runtime?.displayName) return runtime.displayName;

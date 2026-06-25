@@ -17,10 +17,10 @@ Use this skill for repository-local durable knowledge and files:
 
 Use neighboring skills instead when the task is mainly about:
 
-- event or reminder state → `events` tool
-- durable assistant behavior rules → `users` tool
-- access or identity-link state → `users` tool
-- actual Telegram delivery → `telegram` tool
+- event or reminder state → `cli-events`
+- durable assistant behavior rules → `cli-rules`
+- access or identity-link state → `cli-access`
+- actual Telegram delivery → `cli-telegram`
 
 ## First action
 
@@ -43,7 +43,6 @@ Use neighboring skills instead when the task is mainly about:
 - If new information conflicts with an existing note and replacement is unclear, ask.
 - Do not turn every appointment or date into memory.
 - Do not claim something was saved, moved, merged, linked, or persisted unless the repository was actually updated.
-- If a request is to manage Telegram users, authorizations, access levels, timezones, person links, or durable assistant rules, prefer the `users` Pi tool.
 - When ownership becomes clearer later, prefer cleanup that consolidates provisional notes into the canonical owner path.
 
 ## Runtime notes

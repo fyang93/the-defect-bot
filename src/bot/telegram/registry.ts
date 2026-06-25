@@ -26,6 +26,7 @@ export type KnownTelegramUser = {
   firstName?: string;
   lastName?: string;
   displayName: string;
+  aliases?: string[];
   lastSeenAt: string;
 };
 export type KnownTelegramChat = {
@@ -187,6 +188,7 @@ export function listKnownTelegramUsers(allowedUserIds?: number[]): KnownTelegram
       firstName: undefined,
       lastName: undefined,
       displayName: value.displayName || value.username || id,
+      aliases: value.aliases,
       lastSeenAt: value.lastSeenAt || "",
     });
   }
@@ -201,6 +203,7 @@ export function listKnownTelegramUsers(allowedUserIds?: number[]): KnownTelegram
       firstName: value.firstName ?? previous?.firstName,
       lastName: value.lastName ?? previous?.lastName,
       displayName: previous?.displayName || value.displayName || String(numericId),
+      aliases: previous?.aliases,
       lastSeenAt: [value.lastSeenAt, previous?.lastSeenAt].filter(Boolean).sort().at(-1) || "",
     });
   }
@@ -218,7 +221,7 @@ export function getTelegramUserDisplayName(userId: number | undefined, allowedUs
   return user.username ? `${user.displayName} (@${user.username})` : user.displayName;
 }
 
-export function findTelegramUsers(input: { id?: number; username?: string; displayName?: string }, allowedUserIds?: number[]): KnownTelegramUser[] {
+export function findTelegramUsers(input: { id?: number; username?: string; displayName?: string; alias?: string }, allowedUserIds?: number[]): KnownTelegramUser[] {
   const allowed = allowedUserIdSet(allowedUserIds);
   if (typeof input.id === "number" && Number.isInteger(input.id)) {
     if (allowed && !allowed.has(input.id)) return [];
@@ -230,6 +233,7 @@ export function findTelegramUsers(input: { id?: number; username?: string; displ
         firstName: undefined,
         lastName: undefined,
         displayName: canonical.displayName || canonical.username || String(input.id),
+        aliases: canonical.aliases,
         lastSeenAt: canonical.lastSeenAt || "",
       }];
     }
@@ -247,14 +251,14 @@ export function findTelegramUsers(input: { id?: number; username?: string; displ
     return [];
   }
 
-  const candidates = [input.username, input.displayName]
+  const candidates = [input.username, input.alias, input.displayName]
     .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
     .map(normalizeLookupKey);
   if (candidates.length === 0) return [];
 
   return listKnownTelegramUsers(allowedUserIds).filter((user) => {
     const keys = new Set(
-      [user.username, user.displayName]
+      [user.username, user.displayName, ...(user.aliases || [])]
         .filter((item): item is string => Boolean(item && item.trim()))
         .map(normalizeLookupKey),
     );

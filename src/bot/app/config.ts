@@ -6,11 +6,14 @@ import type { AppConfig } from "./types";
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
-function optionalStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  return value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => typeof item === "string" ? item.trim() : "").filter(Boolean) : [];
+}
 function stringOr(value: unknown, fallback: string): string {
   return typeof value === "string" ? value : fallback;
 }
@@ -62,14 +65,13 @@ function isValidTimezone(value: string): boolean {
 }
 
 export function loadConfig(configPath = path.resolve(process.cwd(), "config.toml")): AppConfig {
-  const resolvedConfigPath = path.resolve(configPath);
-  const raw = readFileSync(resolvedConfigPath, "utf8");
+  const raw = readFileSync(configPath, "utf8");
   const parsed = asRecord(parse(raw));
 
   const telegram = asRecord(parsed.telegram);
   const bot = asRecord(parsed.bot);
   const maintenance = asRecord(parsed.maintenance);
-  const repoRoot = path.dirname(resolvedConfigPath);
+  const repoRoot = path.resolve(process.cwd());
   const tmpDir = path.resolve(repoRoot, "tmp");
   const uploadSubdir = "telegram";
   const logFile = path.resolve(repoRoot, "logs", "bot.log");
@@ -80,13 +82,17 @@ export function loadConfig(configPath = path.resolve(process.cwd(), "config.toml
   const defaultTimezone = requiredString(bot.default_timezone, "bot.default_timezone", configPath);
   const maintenanceIdleAfterMinutes = numberOr(maintenance.idle_after_minutes, 15);
   const tmpRetentionDays = Math.max(1, numberOr(maintenance.tmp_retention_days, 7));
+  const waitingMessages = stringArray(telegram.waiting_messages);
+  const waitingMessage = optionalString(telegram.waiting_message)?.trim() || waitingMessages[0] || "";
+  const effectiveWaitingMessages = waitingMessages.length > 0 ? waitingMessages : (waitingMessage ? [waitingMessage] : []);
 
   const config: AppConfig = {
     telegram: {
       botToken: stringOr(telegram.bot_token, ""),
       adminUserId,
-      waitingMessages: optionalStringArray(telegram.waiting_messages) || [],
-      waitingMessageRotationSeconds: Math.max(1, numberOr(telegram.waiting_message_rotation_seconds, 5)),
+      waitingMessage,
+      waitingMessages: effectiveWaitingMessages,
+      waitingMessageRotationSeconds: Math.max(0, numberOr(telegram.waiting_message_rotation_seconds, 5)),
       inputMergeWindowSeconds: Math.max(0, numberOr(telegram.input_merge_window_seconds, 3)),
       menuPageSize: numberOr(telegram.menu_page_size, 8),
     },

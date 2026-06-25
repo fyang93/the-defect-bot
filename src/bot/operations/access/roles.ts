@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AppConfig } from "bot/app/types";
 import { state } from "bot/app/state";
-import { invalidateContextStoreCache, loadUsers, resolveUser, resolveUserByDisplayName, resolveUserByUsername, type UserRecord } from "bot/operations/context/store";
+import { invalidateContextStoreCache, loadUsers, resolveUser, resolveUserByAlias, resolveUserByDisplayName, resolveUserByUsername, type UserRecord } from "bot/operations/context/store";
 
 export type AccessLevel = "admin" | "trusted" | "allowed" | "none";
 export type StoredUserAccessLevel = Exclude<AccessLevel, "none">;
@@ -192,7 +192,7 @@ export async function clearStoredUserAccessLevels(
   return { changedUserIds, unchangedUserIds };
 }
 
-export function resolveStoredUserId(config: AppConfig, input: { userId?: number; username?: string; displayName?: string }): number | null {
+export function resolveStoredUserId(config: AppConfig, input: { userId?: number; username?: string; displayName?: string; alias?: string }): number | null {
   if (Number.isInteger(input.userId) && (input.userId || 0) > 0) return input.userId || null;
   const username = normalizeUsername(input.username);
   if (username) {
@@ -201,6 +201,8 @@ export function resolveStoredUserId(config: AppConfig, input: { userId?: number;
     const runtimeUsernameMatch = Object.entries(state.telegramUserCache).find(([, user]) => normalizeUsername(user.username) === username);
     if (runtimeUsernameMatch) return Number(runtimeUsernameMatch[0]);
   }
+  const aliasMatch = resolveUserByAlias(config.paths.repoRoot, input.alias || input.displayName);
+  if (aliasMatch) return Number(aliasMatch[0]);
   const displayNameMatch = resolveUserByDisplayName(config.paths.repoRoot, input.displayName);
   if (displayNameMatch) return Number(displayNameMatch[0]);
   const normalizedDisplayName = typeof input.displayName === "string" ? input.displayName.trim().toLowerCase() : "";

@@ -34,18 +34,17 @@ type AttachmentCapabilityCache = {
 const MODEL_CAPABILITY_CACHE_MS = 60_000;
 const MODEL_REGISTRY_REFRESH_CACHE_MS = 60_000;
 const COMPOSER_WEB_TOOLS = ["web_search", "fetch_content", "get_search_content"];
-
-const STATE_CHANGE_ACTION_PATTERN = /删除|删掉|取消|移除|暂停|恢复|修改|更新|设置|创建|新增|添加|发送|转发|delete|remove|cancel|pause|resume|update|set|create|add|send/i;
-const STATE_OBJECT_PATTERN = /提醒|日程|事件|组会|会议|用户|权限|授权|消息|文件|reminder|schedule|event|meeting|user|access|auth|message|file/i;
-const COMPLETED_STATE_CHANGE_PATTERN = /已|已经|完成|成功|好了|删除了|删掉了|取消了|设置了|创建了|添加了|发送了|done|deleted|removed|cancelled|created|updated|sent|scheduled/i;
-
-function isStateChangingRequest(text: string): boolean {
-  return STATE_CHANGE_ACTION_PATTERN.test(text) && STATE_OBJECT_PATTERN.test(text);
-}
-
-function claimsCompletedStateChange(text: string): boolean {
-  return COMPLETED_STATE_CHANGE_PATTERN.test(text) && STATE_OBJECT_PATTERN.test(text);
-}
+const BOT_ASSISTANT_TOOLS = [
+  "telegram_list_recipients",
+  "telegram_send_message",
+  "telegram_send_file",
+  "user_add_alias",
+  "user_set_timezone",
+  "user_set_person_path",
+  "user_update_rules",
+  "auth_add_pending",
+  "defect_events",
+];
 
 function parseModel(model: string | null): { providerID: string; modelID: string } | null {
   if (!model) return null;
@@ -76,7 +75,7 @@ export class AiService {
     this.modelRegistry = ModelRegistry.create(this.authStorage, path.join(this.piAgentDir(), "models.json"));
     this.sessionManager = SessionManager.inMemory(this.config.paths.repoRoot);
     this.sessions = new SessionBroker(
-      (scopeKey, scopeLabel) => this.createSession(scopeKey, scopeLabel, "assistant"),
+      (scopeKey, scopeLabel) => this.createSession(scopeKey, scopeLabel, "assistant", true, { toolAllowlist: BOT_ASSISTANT_TOOLS }),
       async (_sessionId) => {},
     );
     this.promptTemplates = new PromptTemplateRenderer(() => this.piAgentDir());
@@ -134,7 +133,7 @@ export class AiService {
   }
 
   async warmAssistantResources(): Promise<void> {
-    const entry = await this.createSession(undefined, "Warm assistant resources", "assistant", true);
+    const entry = await this.createSession(undefined, "Warm assistant resources", "assistant", true, { toolAllowlist: BOT_ASSISTANT_TOOLS });
     await entry.session.abort().catch(() => {});
     entry.session.dispose();
     await logger.info("pi sdk assistant resources warmed");
@@ -304,7 +303,6 @@ export class AiService {
       "User request:",
       input.userRequestText.trim(),
     ].filter(Boolean).join("\n");
-    const stateChangingRequest = isStateChangingRequest(input.userRequestText);
 
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       if (input.isTaskCurrent && !input.isTaskCurrent()) {
@@ -319,7 +317,6 @@ export class AiService {
             "Your previous output was invalid.",
             "Do not write XML, <invoke ...> blocks, or tool-call text.",
             "Use the needed tools, then return the final user-visible reply for this turn in the configured persona.",
-            stateChangingRequest ? "This request changes bot state; you must call the repository tool. If no tool can run, say you did not complete it." : "",
           ].join("\n");
       const promptAttachments = await this.filterAttachmentsForSelectedModel(policyFilteredAttachments, "assistant turn");
       const response = await this.promptInScopedAssistantSession(attemptPrompt, promptAttachments, input.scopeKey, input.scopeLabel, input.onProgress);
@@ -343,19 +340,6 @@ export class AiService {
         }
         await logger.warn(`discarded assistant output attempt=${attempt} reason=non-displayable`);
         continue;
-      }
-      if (stateChangingRequest && hasDisplayableMessage && claimsCompletedStateChange(parsed.message)) {
-        await logger.warn(`discarded assistant output attempt=${attempt} reason=claimed-state-change-without-tool`);
-        if (attempt < 2) continue;
-        return {
-          message: this.config.bot.language === "en"
-            ? "I did not actually complete that change because no repository tool ran. Please specify the exact reminder/event and try again."
-            : "我没有实际完成这次修改，因为没有工具执行记录。请指定要操作的提醒/日程后再试一次。",
-          usedNativeExecution: false,
-          completedActions: [],
-          files: [],
-          attachments: [],
-        };
       }
       if (hasDisplayableMessage || hasStructuredOutputs) {
         return {

@@ -69,20 +69,6 @@ export class CosmeticTelegramFeedback {
     }
   }
 
-  async editWaitingMessageSafe(ctx: Context, chatId: number, messageId: number, text: string): Promise<void> {
-    if (this.unavailableUntil > Date.now()) return;
-    try {
-      await sendTelegramWithRetry(() => ctx.api.editMessageText(chatId, messageId, text), "edit waiting message", { attempts: 1 });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (/message is not modified|400: Bad Request/i.test(message)) return;
-      if (isTransientTelegramNetworkError(error)) {
-        this.unavailableUntil = Date.now() + COSMETIC_TELEGRAM_FAILURE_COOLDOWN_MS;
-      }
-      await logger.warn(`waiting message edit failed chat=${chatId} message=${messageId}: ${message}`);
-    }
-  }
-
   async sendWaitingMessageSafe(ctx: Context, text: string): Promise<{ message_id?: number } | null> {
     if (this.unavailableUntil > Date.now()) return null;
     try {

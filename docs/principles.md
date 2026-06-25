@@ -5,7 +5,7 @@ This project defaults to **Pi SDK + Pi tools + deterministic repository state**.
 ## State and execution
 
 - Keep canonical state in repository files under `system/`, `memory/`, and related domain stores.
-- Mutate canonical state through deterministic code paths: operations, schemas, and Pi tools.
+- Mutate canonical state through deterministic code paths: operations, schemas, repo CLI, and Pi tools.
 - Do not encode durable persistence protocols only in prompts.
 - Do not write under `system/` except through approved deterministic interfaces.
 

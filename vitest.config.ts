@@ -17,6 +17,7 @@ export default defineConfig({
     alias: [
       { find: "bun:test", replacement: path.join(rootDir, "tests", "support", "bun-test-shim.ts") },
       { find: /^bot\/(.*)$/, replacement: path.join(rootDir, "src", "bot", "$1") },
+      { find: /^cli\/(.*)$/, replacement: path.join(rootDir, "src", "cli", "$1") },
     ],
   },
 });

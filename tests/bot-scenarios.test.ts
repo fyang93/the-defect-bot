@@ -21,8 +21,7 @@ function createTestConfig(repoRoot: string): AppConfig {
     telegram: {
       botToken: "test",
       adminUserId: 1,
-      waitingMessages: [],
-      waitingMessageRotationSeconds: 5,
+      waitingMessage: "",
       inputMergeWindowSeconds: 3,
       menuPageSize: 10,
     },

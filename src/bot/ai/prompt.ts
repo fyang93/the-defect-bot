@@ -18,6 +18,7 @@ export function buildProjectSystemPrompt(personaStyle?: string, role: "assistant
     return [
       "Follow the Defect Bot assistant instructions loaded from AGENTS.md.",
       "Do the work, then return one user-visible reply.",
+      "If the user asks you to send, tell, forward, greet, or message someone outside the current chat, do not answer as that person; use telegram_list_recipients with a query, then telegram_send_message, or ask for clarification from tool results.",
       ...buildPersonaStyleLines(personaStyle),
     ].filter(Boolean).join("\n");
   }
@@ -80,6 +81,7 @@ export function buildPrompt(text: string, uploadedFiles: UploadedFile[], default
     localMessageTime ? `Local time: ${localMessageTime.localDateTime} (${localMessageTime.timezone}).` : "",
     localMessageTime ? `Interpret relative times in ${localMessageTime.timezone}.` : "",
     ...buildAccessConstraintLines(accessRole),
+    "For send/tell/greet X (给X发/告诉/打招呼), use telegram_list_recipients with X as query, then telegram_send_message; never reply as X.",
     ...buildPersonaStyleLines(personaStyle),
     `Request: ${userRequest}`,
   ].filter(Boolean);

@@ -9,17 +9,17 @@ import type { AppConfig } from "bot/app/types";
 import { AiService } from "bot/ai";
 import { ScheduleEngine } from "bot/operations/events";
 
-export type ToolArgs = Record<string, unknown>;
+export type CliArgs = Record<string, unknown>;
 
-export class ToolOutput extends Error {
+export class CliOutput extends Error {
   constructor(readonly value: unknown) {
-    super("tool-output");
+    super("cli-output");
   }
 }
 
-export type RepoToolContext = {
+export type RepoCliContext = {
   config: AppConfig;
-  args: ToolArgs;
+  args: CliArgs;
   scheduleEngine: ScheduleEngine;
   output: (value: unknown) => never;
   nowIso: () => string;
@@ -33,6 +33,7 @@ export type RepoToolContext = {
     userId?: number;
     username?: string;
     displayName?: string;
+    alias?: string;
     resolvedUserId?: number | null;
   };
   usersDoc: () => { users: Record<string, Record<string, unknown>> };
@@ -87,7 +88,7 @@ export function summarizeArgsForLog(value: unknown): string {
   }
 }
 
-export function appendToolLogLine(config: AppConfig, level: "INFO" | "WARN" | "ERROR", message: string): void {
+export function appendCliLogLine(config: AppConfig, level: "INFO" | "WARN" | "ERROR", message: string): void {
   const line = `[${new Date().toISOString()}] [${level}] ${message}\n`;
   try {
     mkdirSync(path.dirname(config.paths.logFile), { recursive: true });
@@ -97,24 +98,24 @@ export function appendToolLogLine(config: AppConfig, level: "INFO" | "WARN" | "E
   }
 }
 
-export function emitToolLogLine(config: AppConfig, level: "INFO" | "WARN" | "ERROR", message: string): void {
-  const line = `[repo-tool] ${message}`;
+export function emitCliTerminalLine(config: AppConfig, level: "INFO" | "WARN" | "ERROR", message: string): void {
+  const line = `[repo-cli] ${message}`;
   try {
     process.stderr.write(`${line}\n`);
   } catch {
     // ignore terminal logging failures
   }
-  appendToolLogLine(config, level, `repo tool terminal ${message}`);
+  appendCliLogLine(config, level, `repo cli terminal ${message}`);
 }
 
-export async function initializeRepoTool(args: ToolArgs, configPath?: string): Promise<RepoToolContext> {
-  const config = loadConfig(configPath);
+export async function initializeRepoCli(args: CliArgs): Promise<RepoCliContext> {
+  const config = loadConfig();
   await loadPersistentState(config.paths.stateFile);
   await ensureAdminUserAccessLevel(config);
   const scheduleEngine = new ScheduleEngine(config, new AiService(config));
 
   const output = (value: unknown): never => {
-    throw new ToolOutput(value);
+    throw new CliOutput(value);
   };
 
   const readJson = <T>(relativePath: string, fallback: T): T => {
@@ -148,8 +149,9 @@ export async function initializeRepoTool(args: ToolArgs, configPath?: string): P
     const userId = asInt(args.userId);
     const username = cleanText(args.username);
     const displayName = cleanText(args.displayName);
-    const resolvedUserId = resolveStoredUserId(config, { userId, username, displayName });
-    return { userId, username, displayName, resolvedUserId };
+    const alias = cleanText(args.alias) || cleanText(args.query);
+    const resolvedUserId = resolveStoredUserId(config, { userId, username, displayName, alias });
+    return { userId, username, displayName, alias, resolvedUserId };
   };
 
   return {
@@ -167,13 +169,13 @@ export async function initializeRepoTool(args: ToolArgs, configPath?: string): P
     resolveUserLookup,
     usersDoc,
     logTextContent,
-    logInfo: (message: string) => emitToolLogLine(config, "INFO", message),
-    logWarn: (message: string) => emitToolLogLine(config, "WARN", message),
-    logError: (message: string) => emitToolLogLine(config, "ERROR", message),
+    logInfo: (message: string) => emitCliTerminalLine(config, "INFO", message),
+    logWarn: (message: string) => emitCliTerminalLine(config, "WARN", message),
+    logError: (message: string) => emitCliTerminalLine(config, "ERROR", message),
   };
 }
 
-function resolvePendingAuthorizationExpiresAt(args: ToolArgs, now = Date.now()): string | null {
+function resolvePendingAuthorizationExpiresAt(args: CliArgs, now = Date.now()): string | null {
   const explicitExpiresAt = cleanText(args.expiresAt);
   if (explicitExpiresAt) {
     const parsed = Date.parse(explicitExpiresAt);
@@ -187,7 +189,7 @@ function resolvePendingAuthorizationExpiresAt(args: ToolArgs, now = Date.now()):
   return new Date(now + 24 * 60 * 60 * 1000).toISOString();
 }
 
-export async function addPendingAuthorization(context: RepoToolContext): Promise<void> {
+export async function addPendingAuthorization(context: RepoCliContext): Promise<void> {
   const { args, output, requireAdminRequester, cleanText, asInt, nowIso, config } = context;
   requireAdminRequester();
   const username = cleanText(args.username);
@@ -201,6 +203,6 @@ export async function addPendingAuthorization(context: RepoToolContext): Promise
   output({ ok: true, pendingAuthorizations: state.pendingAuthorizations, expiresAt });
 }
 
-export async function logToolInvocation(config: AppConfig, command: string, rawDomain: string, args: ToolArgs): Promise<void> {
-  appendToolLogLine(config, "INFO", `repo tool invoke command=${command} raw=${rawDomain} args=${summarizeArgsForLog(args)}`);
+export async function logCliInvocation(config: AppConfig, command: string, rawDomain: string, args: CliArgs): Promise<void> {
+  appendCliLogLine(config, "INFO", `repo cli invoke command=${command} raw=${rawDomain} args=${summarizeArgsForLog(args)}`);
 }
