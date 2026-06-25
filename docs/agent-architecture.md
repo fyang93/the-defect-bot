@@ -1,6 +1,6 @@
 # Agent architecture
 
-This project uses Pi SDK sessions directly. OpenCode server/client integration has been removed.
+This project uses Pi SDK sessions directly.
 
 ## Workspace layout
 
