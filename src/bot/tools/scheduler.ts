@@ -25,16 +25,16 @@ function atTimeSpec(sendAt: string): string {
 }
 
 function writeScheduledScript(config: AppConfig, command: string, args: Record<string, unknown>): string {
-  const dir = path.join(config.paths.tmpDir, "scheduled-cli");
+  const dir = path.join(config.paths.tmpDir, "scheduled-tools");
   mkdirSync(dir, { recursive: true });
   const id = `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const scriptPath = path.join(dir, `${id}.sh`);
-  const cliArgs = JSON.stringify(args);
+  const toolArgs = JSON.stringify(args);
   const content = [
     "#!/bin/sh",
     "set -eu",
     `cd ${shellQuote(config.paths.repoRoot)}`,
-    `exec ${shellQuote(bunCommand())} src/cli.ts ${shellQuote(command)} ${shellQuote(cliArgs)}`,
+    `exec ${shellQuote(bunCommand())} src/bot/tools/run-scheduled.ts ${shellQuote(command)} ${shellQuote(toolArgs)}`,
   ].join("\n") + "\n";
   writeFileSync(scriptPath, content, { encoding: "utf8", mode: 0o700 });
   return scriptPath;
@@ -52,7 +52,7 @@ function tryAtScheduler(config: AppConfig, command: string, args: Record<string,
   return { ok: true, scheduler: "at", handle };
 }
 
-export function scheduleRepoCliCommand(config: AppConfig, command: string, args: Record<string, unknown>, sendAt: string): { ok: true; scheduler: "at"; handle: string } | { ok: false; error: string } {
+export function scheduleRepoToolCommand(config: AppConfig, command: string, args: Record<string, unknown>, sendAt: string): { ok: true; scheduler: "at"; handle: string } | { ok: false; error: string } {
   const parsed = Date.parse(sendAt);
   if (!Number.isFinite(parsed) || parsed <= Date.now()) {
     return { ok: false, error: "invalid-sendAt" };

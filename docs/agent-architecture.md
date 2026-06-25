@@ -13,7 +13,7 @@ agent/
     auth.json               # local credentials; ignored by git
     models.json             # local/custom model config; ignored by git
     extensions/
-      defect-bot-tools/     # repository Pi tools backed by repo CLI
+      tools/                # repository Pi tools backed by deterministic handlers
     skills/
       memory/               # durable local memory workflow
       custom-toolbox/       # narrow project helper workflows
@@ -36,11 +36,11 @@ The intended direction is to keep **assistant** as the only broad, state-changin
 
 The assistant should use these tools instead of raw shell commands for canonical bot state:
 
-- `defect_events`: reminders, events, recurring schedules, automations, pause/resume/delete
-- `defect_users`: user records, access levels, pending auth, timezones, durable assistant rules
-- `defect_telegram`: recipient resolution, sends, file sends, scheduled Telegram delivery
+- `events`: reminders, events, recurring schedules, automations, pause/resume/delete
+- `users`: user records, access levels, pending auth, timezones, durable assistant rules
+- `telegram`: recipient resolution, sends, file sends, scheduled Telegram delivery
 
-These tools call `bun run repo:cli -- <command> <json-payload>` internally, preserving existing deterministic CLI behavior and permission checks.
+These tools call deterministic in-process repository handlers, preserving permission checks without exposing command-line wrappers to the assistant.
 
 ## Resource loading and startup latency
 

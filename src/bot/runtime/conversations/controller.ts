@@ -566,7 +566,8 @@ export class ConversationController {
     }
 
     await this.setReactionSafe(ctx, "🤔");
-    const initialWaitingMessage = this.deps.config.telegram.waitingMessage;
+    const waitingMessages = this.deps.config.telegram.waitingMessages;
+    const initialWaitingMessage = waitingMessages[0] || "";
     const waiting = initialWaitingMessage
       ? await this.feedback.sendWaitingMessageSafe(ctx, renderWaitingMessage(slot.input.waitingTemplate, initialWaitingMessage))
       : null;
@@ -590,6 +591,23 @@ export class ConversationController {
       cancelled: false,
     };
     this.activeTasks.set(scopeKey, task);
+    let waitingRotationTimer: ReturnType<typeof setInterval> | undefined;
+    if (waiting?.message_id && waitingMessages.length > 1) {
+      let waitingMessageIndex = 0;
+      waitingRotationTimer = setInterval(() => {
+        if (!this.activeTasks.isCurrent(scopeKey, taskId)) {
+          if (waitingRotationTimer) clearInterval(waitingRotationTimer);
+          return;
+        }
+        waitingMessageIndex = (waitingMessageIndex + 1) % waitingMessages.length;
+        void this.feedback.editWaitingMessageSafe(
+          ctx,
+          chatId,
+          waiting.message_id!,
+          renderWaitingMessage(slot.input.waitingTemplate, waitingMessages[waitingMessageIndex]),
+        );
+      }, this.deps.config.telegram.waitingMessageRotationSeconds * 1000);
+    }
     this.turns.set(scopeKey, {
       ...latest,
       phase: "running",
@@ -608,7 +626,9 @@ export class ConversationController {
         agentService: this.deps.agentService,
         isTaskCurrent: (taskScopeKey, currentTaskId) => this.activeTasks.isCurrent(taskScopeKey, currentTaskId),
         onPruneRecentUploads: (taskScopeKey) => pruneRecentUploads(taskScopeKey),
-        onStopWaiting: () => {},
+        onStopWaiting: () => {
+          if (waitingRotationTimer) clearInterval(waitingRotationTimer);
+        },
         onSetReaction: (reactionCtx, emoji) => this.setReactionSafe(reactionCtx, emoji),
         onReleaseActiveTask: (taskScopeKey, currentTaskId) => {
           this.activeTasks.deleteIfCurrent(taskScopeKey, currentTaskId);
@@ -617,6 +637,7 @@ export class ConversationController {
       });
     } finally {
       this.activeTasks.deleteIfCurrent(scopeKey, task.id);
+      if (waitingRotationTimer) clearInterval(waitingRotationTimer);
       this.clearTurnIfCurrent(scopeKey, task.id);
     }
   }

@@ -14,7 +14,8 @@ function createTestConfig(repoRoot: string): AppConfig {
     telegram: {
       botToken: "test",
       adminUserId: 1,
-      waitingMessage: "",
+      waitingMessages: [],
+      waitingMessageRotationSeconds: 5,
       inputMergeWindowSeconds: 3,
       menuPageSize: 10,
     },
@@ -228,20 +229,20 @@ describe("pending authorization: user messages bot → access granted → persis
   });
 });
 
-describe("pending authorization: CLI add_pending_authorization via runtime_state", () => {
+describe("pending authorization: tool add_pending_authorization via runtime_state", () => {
   test("add_pending_authorization stores authorization in state", async () => {
     const futureExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
     rememberPendingAuthorization({
       kind: "allowed",
-      username: "cli_user",
+      username: "tool_user",
       createdBy: 1,
       createdAt: new Date().toISOString(),
       expiresAt: futureExpiry,
     });
 
     expect(state.pendingAuthorizations.length).toBe(1);
-    expect(state.pendingAuthorizations[0].username).toBe("cli_user");
+    expect(state.pendingAuthorizations[0].username).toBe("tool_user");
   });
 
   test("prune removes only expired authorizations", async () => {

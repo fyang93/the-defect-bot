@@ -8,7 +8,8 @@ function createConfig(overrides: Partial<AppConfig["telegram"]> = {}): AppConfig
     telegram: {
       botToken: "test",
       adminUserId: 1,
-      waitingMessage: "",
+      waitingMessages: [],
+      waitingMessageRotationSeconds: 5,
       inputMergeWindowSeconds: 3,
       menuPageSize: 8,
       ...overrides,
@@ -410,7 +411,7 @@ describe("conversation controller input merge window", () => {
   });
 
   test("continues the assistant turn when the waiting message send fails", async () => {
-    const controller = createController(createConfig({ waitingMessage: "processing", inputMergeWindowSeconds: 0 })) as any;
+    const controller = createController(createConfig({ waitingMessages: ["processing"], inputMergeWindowSeconds: 0 })) as any;
     const ctx = {
       ...createCtx(41),
       reply: async () => {
@@ -423,6 +424,46 @@ describe("conversation controller input merge window", () => {
 
     await expect(controller.beginConversationTurn(ctx, "", "Current user message:\nhi", [], [], "2026-06-05T00:00:00.000Z")).resolves.toBeUndefined();
     expect(controller.turns.get("user:1")).toBeUndefined();
+  });
+
+
+  test("rotates multiple waiting messages in order", async () => {
+    const edits: string[] = [];
+    const controller = new ConversationController({
+      config: createConfig({ waitingMessages: ["one", "two", "three"], waitingMessageRotationSeconds: 0.01, inputMergeWindowSeconds: 0 }),
+      bot: {
+        api: {
+          deleteMessage: async () => {},
+        },
+      } as any,
+      agentService: {
+        abortCurrentSession: async () => {},
+        runAssistantTurn: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          return { message: "", files: [], attachments: [], completedActions: [], usedNativeExecution: true };
+        },
+      } as any,
+      isTrustedUserId: () => true,
+      isAdminUserId: () => true,
+      isAddressedToBot: () => true,
+    } as any) as any;
+    const ctx = {
+      ...createCtx(42),
+      reply: async (text: string) => {
+        edits.push(text);
+        return { message_id: 99 };
+      },
+      api: {
+        editMessageText: async (_chatId: number, _messageId: number, text: string) => {
+          edits.push(text);
+        },
+        deleteMessage: async () => {},
+      },
+    } as any;
+
+    await controller.beginConversationTurn(ctx, "", "Current user message:\nhi", [], [], "2026-06-05T00:00:00.000Z");
+
+    expect(edits.slice(0, 3)).toEqual(["one", "two", "three"]);
   });
 
   test("does not merge when active task is cancelled", async () => {

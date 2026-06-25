@@ -7,16 +7,16 @@ import { getCurrentOccurrence, listReminderInstances, resolveScheduleDisplayTime
 import { buildEventScheduleFromExternal } from "bot/operations/events/schedule_parser";
 import { createEventRecordWithDefaults, readEventRecords } from "bot/operations/events/store";
 import type { Reminder } from "bot/operations/events/types";
-import type { RepoCliContext } from "cli/runtime";
+import type { RepoToolContext } from "bot/tools/runtime";
 
-function requesterTimezoneForCli(context: RepoCliContext): string | undefined {
+function requesterTimezoneForTool(context: RepoToolContext): string | undefined {
   const requesterUserId = context.asInt(context.args.requesterUserId);
   if (!requesterUserId) return context.config.bot.defaultTimezone;
   return resolveUser(context.config.paths.repoRoot, requesterUserId, { defaultTimezone: context.config.bot.defaultTimezone })?.timezone?.trim() || context.config.bot.defaultTimezone;
 }
 
-function effectiveRequesterTimezoneForCli(context: RepoCliContext): string {
-  return requesterTimezoneForCli(context) || context.config.bot.defaultTimezone;
+function effectiveRequesterTimezoneForTool(context: RepoToolContext): string {
+  return requesterTimezoneForTool(context) || context.config.bot.defaultTimezone;
 }
 
 function localScheduledAt(event: EventRecord, timezone: string): string | undefined {
@@ -55,10 +55,10 @@ function parseRemindersArg(raw: unknown): Reminder[] | undefined {
   return reminders.length > 0 ? reminders : undefined;
 }
 
-function serializeEventForCli(context: RepoCliContext, event: EventRecord): Record<string, unknown> {
+function serializeEventForTool(context: RepoToolContext, event: EventRecord): Record<string, unknown> {
   const displayTimezone = resolveScheduleDisplayTimezone(context.config, event);
-  const requesterTimezone = requesterTimezoneForCli(context);
-  const effectiveRequesterTimezone = effectiveRequesterTimezoneForCli(context);
+  const requesterTimezone = requesterTimezoneForTool(context);
+  const effectiveRequesterTimezone = effectiveRequesterTimezoneForTool(context);
   const occurrence = getCurrentOccurrence(event);
   const reminders = occurrence ? listReminderInstances(event, occurrence) : [];
   return {
@@ -85,7 +85,7 @@ function serializeEventForCli(context: RepoCliContext, event: EventRecord): Reco
   };
 }
 
-export async function handleEventsList(context: RepoCliContext): Promise<void> {
+export async function handleEventsList(context: RepoToolContext): Promise<void> {
   const requesterUserId = context.asInt(context.args.requesterUserId);
   const accessLevel = accessLevelForUser(context.config, requesterUserId);
   context.logInfo(`events:list: loading visible events for requester ${requesterUserId ?? "unknown"}`);
@@ -96,12 +96,12 @@ export async function handleEventsList(context: RepoCliContext): Promise<void> {
     : events.filter((event) => canManageOwnSchedules(accessLevel) && event.createdByUserId === requesterUserId);
   const match = context.parseObjectArg(context.args.match) || {};
   const filtered = Object.keys(match).length > 0
-    ? visible.filter((event) => eventMatchesFilters(event, match, effectiveRequesterTimezoneForCli(context)))
+    ? visible.filter((event) => eventMatchesFilters(event, match, effectiveRequesterTimezoneForTool(context)))
     : visible;
-  context.output({ ok: true, events: filtered.map((event) => serializeEventForCli(context, event)) });
+  context.output({ ok: true, events: filtered.map((event) => serializeEventForTool(context, event)) });
 }
 
-export async function handleEventsGet(context: RepoCliContext): Promise<void> {
+export async function handleEventsGet(context: RepoToolContext): Promise<void> {
   const eventId = context.cleanText(context.args.eventId);
   const requesterUserId = context.asInt(context.args.requesterUserId);
   const accessLevel = accessLevelForUser(context.config, requesterUserId);
@@ -116,7 +116,7 @@ export async function handleEventsGet(context: RepoCliContext): Promise<void> {
     if (!canManageAllSchedules(accessLevel) && event.createdByUserId !== requesterUserId) {
       context.output({ ok: false, error: "event-read-not-allowed" });
     }
-    context.output({ ok: true, event: serializeEventForCli(context, event) });
+    context.output({ ok: true, event: serializeEventForTool(context, event) });
   }
 
   const match = context.parseObjectArg(context.args.match) || {};
@@ -129,13 +129,13 @@ export async function handleEventsGet(context: RepoCliContext): Promise<void> {
     context.output({
       ok: false,
       error: result.reason || "event-not-resolved",
-      events: result.events.map((event) => serializeEventForCli(context, event)),
+      events: result.events.map((event) => serializeEventForTool(context, event)),
     });
   }
-  context.output({ ok: true, event: serializeEventForCli(context, result.events[0]) });
+  context.output({ ok: true, event: serializeEventForTool(context, result.events[0]) });
 }
 
-export async function handleEventsCreate(context: RepoCliContext): Promise<void> {
+export async function handleEventsCreate(context: RepoToolContext): Promise<void> {
   const { args, cleanText, asInt, parseObjectArg, output, logTextContent } = context;
   const title = cleanText(args.title);
   const note = cleanText(args.note);
@@ -181,10 +181,10 @@ export async function handleEventsCreate(context: RepoCliContext): Promise<void>
     targets,
   });
   await logger.info(`system tool events_create created eventId=${event.id} title=${logTextContent(event.title)}`);
-  output({ ok: true, changed: true, eventId: event.id, event: serializeEventForCli(context, event) });
+  output({ ok: true, changed: true, eventId: event.id, event: serializeEventForTool(context, event) });
 }
 
-export async function handleEventMutation(context: RepoCliContext, operation: "update" | "delete" | "pause" | "resume"): Promise<void> {
+export async function handleEventMutation(context: RepoToolContext, operation: "update" | "delete" | "pause" | "resume"): Promise<void> {
   const requesterUserId = context.asInt(context.args.requesterUserId);
   const match = context.parseObjectArg(context.args.match) || {};
   const changes = context.parseObjectArg(context.args.changes) || {};
@@ -231,7 +231,7 @@ export async function handleEventMutation(context: RepoCliContext, operation: "u
     context.output({ ok: false, error: typeof result.reason === "string" && result.reason ? result.reason : `schedule-${operation}-failed`, ...result });
   }
   const events = result.eventIds && result.eventIds.length > 0
-    ? (await readEventRecords(context.config)).filter((event) => result.eventIds?.includes(event.id)).map((event) => serializeEventForCli(context, event))
+    ? (await readEventRecords(context.config)).filter((event) => result.eventIds?.includes(event.id)).map((event) => serializeEventForTool(context, event))
     : undefined;
   const event = events && events.length > 0
     ? events.find((item) => item.id === result.eventId) || events[0]

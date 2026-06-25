@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { clearStoredUserAccessLevel, setStoredUserAccessLevel } from "bot/operations/access/roles";
 import { loadUsers, resolveUser } from "bot/operations/context/store";
-import type { RepoCliContext } from "cli/runtime";
+import type { RepoToolContext } from "bot/tools/runtime";
 
 function normalizeRulesInput(value: unknown): string[] | undefined {
   if (typeof value === "string" && value.trim()) return [value.trim()];
@@ -14,12 +14,12 @@ function normalizeRulesInput(value: unknown): string[] | undefined {
   return deduped.length > 0 ? deduped : undefined;
 }
 
-function resolveEffectiveUser(context: RepoCliContext): { userId?: number; username?: string; displayName?: string; effectiveUserId?: number } {
+function resolveEffectiveUser(context: RepoToolContext): { userId?: number; username?: string; displayName?: string; effectiveUserId?: number } {
   const { userId, username, displayName, resolvedUserId } = context.resolveUserLookup();
   return { userId, username, displayName, effectiveUserId: resolvedUserId ?? userId };
 }
 
-function updateUserField(context: RepoCliContext, field: "timezone" | "personPath", value: string): { effectiveUserId: number; user: Record<string, unknown>; changed: boolean } {
+function updateUserField(context: RepoToolContext, field: "timezone" | "personPath", value: string): { effectiveUserId: number; user: Record<string, unknown>; changed: boolean } {
   const { nowIso, output } = context;
   context.requireAdminRequester();
   const { effectiveUserId } = resolveEffectiveUser(context);
@@ -36,7 +36,7 @@ function updateUserField(context: RepoCliContext, field: "timezone" | "personPat
   return { effectiveUserId: effectiveUserId as number, user: next, changed: JSON.stringify(previous) !== JSON.stringify(next) };
 }
 
-function updateUserDoc(context: RepoCliContext, effectiveUserId: number, mutate: (previous: Record<string, unknown>) => Record<string, unknown>): Record<string, unknown> {
+function updateUserDoc(context: RepoToolContext, effectiveUserId: number, mutate: (previous: Record<string, unknown>) => Record<string, unknown>): Record<string, unknown> {
   const { usersDoc, writeJson, config } = context;
   const doc = usersDoc();
   const key = String(effectiveUserId);
@@ -49,20 +49,20 @@ function updateUserDoc(context: RepoCliContext, effectiveUserId: number, mutate:
   return doc.users[key];
 }
 
-export async function handleUsersList(context: RepoCliContext): Promise<void> {
+export async function handleUsersList(context: RepoToolContext): Promise<void> {
   context.requireAdminRequester();
   context.logInfo("users:list: loading users");
   context.output({ ok: true, users: loadUsers(context.config.paths.repoRoot, { defaultTimezone: context.config.bot.defaultTimezone }) });
 }
 
-export async function handleUsersGet(context: RepoCliContext): Promise<void> {
+export async function handleUsersGet(context: RepoToolContext): Promise<void> {
   context.requireAdminRequester();
   const { resolvedUserId } = context.resolveUserLookup();
   context.logInfo(`users:get: resolving user ${resolvedUserId ?? "unknown"}`);
   context.output({ ok: true, userId: resolvedUserId, user: resolvedUserId ? resolveUser(context.config.paths.repoRoot, resolvedUserId, { defaultTimezone: context.config.bot.defaultTimezone }) || null : null });
 }
 
-export async function handleUsersSetAccess(context: RepoCliContext): Promise<void> {
+export async function handleUsersSetAccess(context: RepoToolContext): Promise<void> {
   const { args, cleanText, output } = context;
   context.requireAdminRequester();
   const { username, displayName, resolvedUserId } = context.resolveUserLookup();
@@ -81,7 +81,7 @@ export async function handleUsersSetAccess(context: RepoCliContext): Promise<voi
   output({ ok: true, changed, userId: resolvedUserId, accessLevel });
 }
 
-export async function handleUsersSetTimezone(context: RepoCliContext): Promise<void> {
+export async function handleUsersSetTimezone(context: RepoToolContext): Promise<void> {
   const value = context.cleanText(context.args.timezone);
   if (!value) context.output({ ok: false, error: "missing-timezone" });
   context.logInfo(`users:set-timezone: setting timezone to ${value}`);
@@ -89,7 +89,7 @@ export async function handleUsersSetTimezone(context: RepoCliContext): Promise<v
   context.output({ ok: true, userId: result.effectiveUserId, changed: result.changed, user: result.user });
 }
 
-export async function handleUsersSetPersonPath(context: RepoCliContext): Promise<void> {
+export async function handleUsersSetPersonPath(context: RepoToolContext): Promise<void> {
   const { args, cleanText, output, nowIso } = context;
   context.requireAdminRequester();
   const { effectiveUserId } = resolveEffectiveUser(context);
@@ -138,7 +138,7 @@ export async function handleUsersSetPersonPath(context: RepoCliContext): Promise
   output({ ok: true, changed: JSON.stringify(previous) !== JSON.stringify(next), userId: effectiveUserId, user: next });
 }
 
-export async function handleUsersAddRule(context: RepoCliContext): Promise<void> {
+export async function handleUsersAddRule(context: RepoToolContext): Promise<void> {
   const { args, cleanText, nowIso, output } = context;
   context.requireAdminRequester();
   const { effectiveUserId } = resolveEffectiveUser(context);
@@ -158,7 +158,7 @@ export async function handleUsersAddRule(context: RepoCliContext): Promise<void>
   output({ ok: true, changed: JSON.stringify(previous) !== JSON.stringify(next), userId: effectiveUserId, user: next });
 }
 
-export async function handleUsersSetRules(context: RepoCliContext): Promise<void> {
+export async function handleUsersSetRules(context: RepoToolContext): Promise<void> {
   const { args, nowIso, output } = context;
   context.requireAdminRequester();
   const { effectiveUserId } = resolveEffectiveUser(context);

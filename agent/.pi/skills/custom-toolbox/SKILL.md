@@ -1,6 +1,6 @@
 ---
 name: custom-toolbox
-description: Load when the task is a narrow project-specific utility workflow with a dedicated local helper note or script, and it does not primarily belong to memory, cli-events, cli-access, cli-rules, or cli-telegram. E.g., autofilling a 研究業務日誌 .xlsx workbook and returning the generated file.
+description: Load when the task is a narrow project-specific utility workflow with a dedicated local helper note or script. E.g., autofilling a 研究業務日誌 .xlsx workbook and returning the generated file.
 ---
 
 # Custom toolbox
@@ -12,10 +12,7 @@ Use this skill only for small project-specific helper flows whose main procedure
 Do not use this skill when the task primarily belongs to:
 
 - `memory`
-- `cli-events`
-- `cli-access`
-- `cli-rules`
-- `cli-telegram`
+- repository Pi tools (`events`, `users`, `telegram`)
 
 ## First action
 
