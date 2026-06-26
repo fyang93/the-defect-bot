@@ -1,10 +1,10 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { clearStoredUserAccessLevel, setStoredUserAccessLevel } from "bot/operations/access/roles";
 import { loadUsers, resolveUser } from "bot/operations/context/store";
-import type { RepoCliContext } from "cli/runtime";
+import type { ToolContext } from "bot/operations/tools/runtime";
 
-function normalizeRulesInput(value: unknown): string[] | undefined {
+function normalizeStringList(value: unknown): string[] | undefined {
   if (typeof value === "string" && value.trim()) return [value.trim()];
   if (!Array.isArray(value)) return undefined;
   const items = value
@@ -14,12 +14,33 @@ function normalizeRulesInput(value: unknown): string[] | undefined {
   return deduped.length > 0 ? deduped : undefined;
 }
 
-function resolveEffectiveUser(context: RepoCliContext): { userId?: number; username?: string; displayName?: string; effectiveUserId?: number } {
+const normalizeRulesInput = normalizeStringList;
+
+function personSlug(value: string | undefined, fallback: string): string {
+  const slug = (value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, "")
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || fallback;
+}
+
+function appendMissingFacts(markdown: string, facts: string[]): string {
+  const existing = new Set(markdown.split("\n").map((line) => line.trim().replace(/^-\s*/, "")));
+  const missing = facts.filter((fact) => !existing.has(fact));
+  if (missing.length === 0) return markdown.endsWith("\n") ? markdown : `${markdown}\n`;
+  const base = markdown.trimEnd();
+  const section = base.includes("\n## Facts\n") || base.endsWith("\n## Facts") ? "" : "\n\n## Facts";
+  return `${base}${section}\n${missing.map((fact) => `- ${fact}`).join("\n")}\n`;
+}
+
+function resolveEffectiveUser(context: ToolContext): { userId?: number; username?: string; displayName?: string; effectiveUserId?: number } {
   const { userId, username, displayName, resolvedUserId } = context.resolveUserLookup();
   return { userId, username, displayName, effectiveUserId: resolvedUserId ?? userId };
 }
 
-function updateUserField(context: RepoCliContext, field: "timezone" | "personPath", value: string): { effectiveUserId: number; user: Record<string, unknown>; changed: boolean } {
+function updateUserField(context: ToolContext, field: "timezone" | "personPath", value: string): { effectiveUserId: number; user: Record<string, unknown>; changed: boolean } {
   const { nowIso, output } = context;
   context.requireAdminRequester();
   const { effectiveUserId } = resolveEffectiveUser(context);
@@ -36,7 +57,7 @@ function updateUserField(context: RepoCliContext, field: "timezone" | "personPat
   return { effectiveUserId: effectiveUserId as number, user: next, changed: JSON.stringify(previous) !== JSON.stringify(next) };
 }
 
-function updateUserDoc(context: RepoCliContext, effectiveUserId: number, mutate: (previous: Record<string, unknown>) => Record<string, unknown>): Record<string, unknown> {
+function updateUserDoc(context: ToolContext, effectiveUserId: number, mutate: (previous: Record<string, unknown>) => Record<string, unknown>): Record<string, unknown> {
   const { usersDoc, writeJson, config } = context;
   const doc = usersDoc();
   const key = String(effectiveUserId);
@@ -49,25 +70,25 @@ function updateUserDoc(context: RepoCliContext, effectiveUserId: number, mutate:
   return doc.users[key];
 }
 
-export async function handleUsersList(context: RepoCliContext): Promise<void> {
+export async function handleUsersList(context: ToolContext): Promise<void> {
   context.requireAdminRequester();
-  context.logInfo("users:list: loading users");
+  context.logInfo("user:list: loading users");
   context.output({ ok: true, users: loadUsers(context.config.paths.repoRoot, { defaultTimezone: context.config.bot.defaultTimezone }) });
 }
 
-export async function handleUsersGet(context: RepoCliContext): Promise<void> {
+export async function handleUsersGet(context: ToolContext): Promise<void> {
   context.requireAdminRequester();
   const { resolvedUserId } = context.resolveUserLookup();
-  context.logInfo(`users:get: resolving user ${resolvedUserId ?? "unknown"}`);
+  context.logInfo(`user:get: resolving user ${resolvedUserId ?? "unknown"}`);
   context.output({ ok: true, userId: resolvedUserId, user: resolvedUserId ? resolveUser(context.config.paths.repoRoot, resolvedUserId, { defaultTimezone: context.config.bot.defaultTimezone }) || null : null });
 }
 
-export async function handleUsersSetAccess(context: RepoCliContext): Promise<void> {
+export async function handleUsersSetAccess(context: ToolContext): Promise<void> {
   const { args, cleanText, output } = context;
   context.requireAdminRequester();
   const { username, displayName, resolvedUserId } = context.resolveUserLookup();
   const accessLevel = cleanText(args.accessLevel);
-  context.logInfo(`users:set-access: updating user ${resolvedUserId ?? username ?? displayName ?? "unknown"}`);
+  context.logInfo(`user:set-access: updating user ${resolvedUserId ?? username ?? displayName ?? "unknown"}`);
   if (!resolvedUserId) {
     output({ ok: false, error: "user-not-resolved" });
     return;
@@ -81,19 +102,19 @@ export async function handleUsersSetAccess(context: RepoCliContext): Promise<voi
   output({ ok: true, changed, userId: resolvedUserId, accessLevel });
 }
 
-export async function handleUsersSetTimezone(context: RepoCliContext): Promise<void> {
+export async function handleUsersSetTimezone(context: ToolContext): Promise<void> {
   const value = context.cleanText(context.args.timezone);
   if (!value) context.output({ ok: false, error: "missing-timezone" });
-  context.logInfo(`users:set-timezone: setting timezone to ${value}`);
+  context.logInfo(`user_set_timezone: setting timezone to ${value}`);
   const result = updateUserField(context, "timezone", value as string);
   context.output({ ok: true, userId: result.effectiveUserId, changed: result.changed, user: result.user });
 }
 
-export async function handleUsersSetPersonPath(context: RepoCliContext): Promise<void> {
+export async function handleUsersSetPersonPath(context: ToolContext): Promise<void> {
   const { args, cleanText, output, nowIso } = context;
   context.requireAdminRequester();
   const { effectiveUserId } = resolveEffectiveUser(context);
-  context.logInfo(`users:set-person-path: updating user ${effectiveUserId ?? "unknown"}`);
+  context.logInfo(`user_set_person_path: updating user ${effectiveUserId ?? "unknown"}`);
   if (!effectiveUserId) {
     output({ ok: false, error: "userId-required-for-personPath" });
     return;
@@ -138,11 +159,11 @@ export async function handleUsersSetPersonPath(context: RepoCliContext): Promise
   output({ ok: true, changed: JSON.stringify(previous) !== JSON.stringify(next), userId: effectiveUserId, user: next });
 }
 
-export async function handleUsersUpdateRules(context: RepoCliContext): Promise<void> {
+export async function handleUsersUpdateRules(context: ToolContext): Promise<void> {
   const { args, nowIso, output } = context;
   context.requireAdminRequester();
   const { effectiveUserId } = resolveEffectiveUser(context);
-  context.logInfo(`users:update-rules: updating rules for user ${effectiveUserId ?? "unknown"}`);
+  context.logInfo(`user_update_rules: updating rules for user ${effectiveUserId ?? "unknown"}`);
   if (!effectiveUserId) {
     output({ ok: false, error: "userId-required-for-rules" });
     return;
@@ -159,11 +180,52 @@ export async function handleUsersUpdateRules(context: RepoCliContext): Promise<v
   output({ ok: true, changed: JSON.stringify(previous) !== JSON.stringify(next), userId: effectiveUserId, user: next });
 }
 
-export async function handleUsersAddAlias(context: RepoCliContext): Promise<void> {
+export async function handleUsersRecordPerson(context: ToolContext): Promise<void> {
   const { args, cleanText, nowIso, output } = context;
   context.requireAdminRequester();
   const { effectiveUserId } = resolveEffectiveUser(context);
-  context.logInfo(`users:add-alias: updating user ${effectiveUserId ?? "unknown"}`);
+  context.logInfo(`user_record_person: updating user ${effectiveUserId ?? "unknown"}`);
+  if (!effectiveUserId) {
+    output({ ok: false, error: "userId-required-for-person" });
+    return;
+  }
+
+  const previous = resolveUser(context.config.paths.repoRoot, effectiveUserId) || {};
+  const name = cleanText(args.name) || normalizeStringList(args.aliases)?.[0] || previous.displayName || previous.username || String(effectiveUserId);
+  const aliases = normalizeStringList(args.aliases) || [];
+  const facts = normalizeStringList(args.facts) || [];
+  const requestedPath = cleanText(args.personPath);
+  const personPath = requestedPath || previous.personPath || `memory/people/${personSlug(previous.username || name, `user-${effectiveUserId}`)}/README.md`;
+  if (path.isAbsolute(personPath) || !/^memory\/people\/(?:.+\/)?README\.md$/i.test(personPath)) {
+    output({ ok: false, error: "invalid-personPath" });
+    return;
+  }
+
+  const absolutePath = path.join(context.config.paths.repoRoot, personPath);
+  mkdirSync(path.dirname(absolutePath), { recursive: true });
+  const existing = existsSync(absolutePath) ? readFileSync(absolutePath, "utf8") : "";
+  const username = typeof previous.username === "string" && previous.username.trim() ? previous.username.trim() : undefined;
+  const header = existing || [
+    `# ${name}`,
+    aliases.length > 0 ? `Aliases: ${aliases.join(", ")}` : "",
+    username ? `Telegram: @${username}` : "",
+    facts.length > 0 ? "\n## Facts" : "",
+  ].filter(Boolean).join("\n");
+  const nextMarkdown = appendMissingFacts(header, facts);
+  writeFileSync(absolutePath, nextMarkdown, "utf8");
+
+  const next = updateUserDoc(context, effectiveUserId, (current) => {
+    const mergedAliases = Array.from(new Set([...(normalizeStringList(current.aliases) || []), ...aliases, name].filter(Boolean)));
+    return { ...current, aliases: mergedAliases, personPath, updatedAt: nowIso() };
+  });
+  output({ ok: true, changed: JSON.stringify(previous) !== JSON.stringify(next) || existing !== nextMarkdown, userId: effectiveUserId, personPath, user: next });
+}
+
+export async function handleUsersAddAlias(context: ToolContext): Promise<void> {
+  const { args, cleanText, nowIso, output } = context;
+  context.requireAdminRequester();
+  const { effectiveUserId } = resolveEffectiveUser(context);
+  context.logInfo(`user_add_alias: updating user ${effectiveUserId ?? "unknown"}`);
   if (!effectiveUserId) {
     output({ ok: false, error: "userId-required-for-alias" });
     return;

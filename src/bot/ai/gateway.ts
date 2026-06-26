@@ -35,15 +35,22 @@ const MODEL_CAPABILITY_CACHE_MS = 60_000;
 const MODEL_REGISTRY_REFRESH_CACHE_MS = 60_000;
 const COMPOSER_WEB_TOOLS = ["web_search", "fetch_content", "get_search_content"];
 const BOT_ASSISTANT_TOOLS = [
+  "event_list",
+  "event_get",
+  "event_create",
+  "event_update",
+  "event_delete",
+  "event_pause",
+  "event_resume",
   "telegram_list_recipients",
   "telegram_send_message",
   "telegram_send_file",
   "user_add_alias",
+  "user_record_person",
   "user_set_timezone",
   "user_set_person_path",
   "user_update_rules",
   "auth_add_pending",
-  "defect_events",
 ];
 
 function parseModel(model: string | null): { providerID: string; modelID: string } | null {
@@ -73,7 +80,7 @@ export class AiService {
     this.config = config;
     this.authStorage = AuthStorage.create(path.join(this.piAgentDir(), "auth.json"));
     this.modelRegistry = ModelRegistry.create(this.authStorage, path.join(this.piAgentDir(), "models.json"));
-    this.sessionManager = SessionManager.inMemory(this.config.paths.repoRoot);
+    this.sessionManager = SessionManager.inMemory(this.assistantWorkspaceDir());
     this.sessions = new SessionBroker(
       (scopeKey, scopeLabel) => this.createSession(scopeKey, scopeLabel, "assistant", true, { toolAllowlist: BOT_ASSISTANT_TOOLS }),
       async (_sessionId) => {},
@@ -81,6 +88,7 @@ export class AiService {
     this.promptTemplates = new PromptTemplateRenderer(() => this.piAgentDir());
     this.sessionFactory = new PiSessionFactory({
       config,
+      cwd: () => this.assistantWorkspaceDir(),
       agentDir: () => this.piAgentDir(),
       authStorage: this.authStorage,
       modelRegistry: this.modelRegistry,
@@ -100,6 +108,10 @@ export class AiService {
 
   private agentWorkspaceDir(): string {
     return path.join(this.config.paths.repoRoot, "agent");
+  }
+
+  private assistantWorkspaceDir(): string {
+    return this.agentWorkspaceDir();
   }
 
   private piAgentDir(): string {
@@ -304,6 +316,8 @@ export class AiService {
       input.userRequestText.trim(),
     ].filter(Boolean).join("\n");
 
+    let lastCompletedActions: string[] = [];
+    let lastUsedNativeExecution = false;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       if (input.isTaskCurrent && !input.isTaskCurrent()) {
         await logger.warn("assistant agent prompt skipped because task is stale");
@@ -324,6 +338,8 @@ export class AiService {
         await logger.warn("assistant agent response ignored because task became stale");
         return { message: "", usedNativeExecution: false, completedActions: response.completedActions, files: [], attachments: [] };
       }
+      lastCompletedActions = response.completedActions;
+      lastUsedNativeExecution = response.usedNativeExecution;
       const rawText = response.rawText.trim();
       const parsed = extractAiTurnResultFromText(rawText);
       const hasStructuredOutputs = parsed.files.length > 0 || parsed.attachments.length > 0;
@@ -352,7 +368,14 @@ export class AiService {
       }
       await logger.warn(`discarded assistant output attempt=${attempt} reason=no-tools-and-no-displayable-text`);
     }
-    throw new Error("Assistant output protocol violation: invalid turn result.");
+    await logger.warn("assistant produced no valid output after retries; returning fallback text");
+    return {
+      message: lastUsedNativeExecution ? "已处理，但没有生成可展示的回复。" : "抱歉，这次没有生成有效回复。请再试一次。",
+      usedNativeExecution: lastUsedNativeExecution,
+      completedActions: lastCompletedActions,
+      files: [],
+      attachments: [],
+    };
   }
 
   stop(): void {

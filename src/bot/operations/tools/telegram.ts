@@ -7,9 +7,9 @@ import { listMatchingTelegramRecipients } from "bot/operations/recipients/resolv
 import { accessLevelForUser } from "bot/operations/access/roles";
 import { hasAccessLevel } from "bot/operations/access/control";
 import { logger } from "bot/app/logger";
-import type { RepoCliContext } from "cli/runtime";
+import type { ToolContext } from "bot/operations/tools/runtime";
 
-async function deliverTelegramMessage(context: RepoCliContext, recipientId: number, content: string, recipientLabel?: string): Promise<{ ok: true; delivered: true; recipientId: number; recipientLabel?: string; messageId?: number }> {
+async function deliverTelegramMessage(context: ToolContext, recipientId: number, content: string, recipientLabel?: string): Promise<{ ok: true; delivered: true; recipientId: number; recipientLabel?: string; messageId?: number }> {
   await logger.info(`telegram tool send_message recipient=${recipientLabel || recipientId} chars=${content.length} content=${context.logTextContent(content)}`);
   const bot = new Bot(context.config.telegram.botToken);
   const result = await sendMessageFormatted(bot as any, recipientId, content);
@@ -18,7 +18,7 @@ async function deliverTelegramMessage(context: RepoCliContext, recipientId: numb
   return { ok: true, delivered: true, recipientId, recipientLabel, messageId };
 }
 
-async function deliverTelegramFile(context: RepoCliContext, recipientId: number, filePath: string, caption?: string, recipientLabel?: string): Promise<{ ok: true; delivered: true; recipientId: number; recipientLabel?: string; messageId?: number; filePath: string }> {
+async function deliverTelegramFile(context: ToolContext, recipientId: number, filePath: string, caption?: string, recipientLabel?: string): Promise<{ ok: true; delivered: true; recipientId: number; recipientLabel?: string; messageId?: number; filePath: string }> {
   await logger.info(`telegram tool send_file recipient=${recipientLabel || recipientId} file=${filePath} captionChars=${caption?.length || 0}`);
   const absPath = path.isAbsolute(filePath) ? filePath : path.resolve(context.config.paths.repoRoot, filePath);
   const relPath = path.relative(context.config.paths.repoRoot, absPath);
@@ -31,7 +31,7 @@ async function deliverTelegramFile(context: RepoCliContext, recipientId: number,
 }
 
 
-function requireOutboundRequester(context: RepoCliContext): number {
+function requireOutboundRequester(context: ToolContext): number {
   const requesterUserId = context.asInt(context.args.requesterUserId);
   const accessLevel = accessLevelForUser(context.config, requesterUserId);
   if (!requesterUserId || !hasAccessLevel(accessLevel, "trusted")) {
@@ -40,7 +40,7 @@ function requireOutboundRequester(context: RepoCliContext): number {
   return requesterUserId;
 }
 
-function resolveImmediateMessageRecipient(context: RepoCliContext): { recipientId: number; recipientLabel: string; mode: "outbound" } {
+function resolveImmediateMessageRecipient(context: ToolContext): { recipientId: number; recipientLabel: string; mode: "outbound" } {
   const directRecipientId = context.asInt(context.args.recipientId);
   if (directRecipientId != null) {
     requireOutboundRequester(context);
@@ -54,7 +54,7 @@ function resolveImmediateMessageRecipient(context: RepoCliContext): { recipientI
   context.output({ ok: false, error: "missing-recipientId-for-message" });
 }
 
-function resolveTelegramRecipient(context: RepoCliContext): { recipientKind?: "user" | "chat"; recipientId: number; recipientLabel: string } {
+function resolveTelegramRecipient(context: ToolContext): { recipientKind?: "user" | "chat"; recipientId: number; recipientLabel: string } {
   const recipientKind = context.cleanText(context.args.recipientKind);
   const recipientId = context.asInt(context.args.recipientId);
   if ((recipientKind && recipientKind !== "user" && recipientKind !== "chat") || !recipientId) context.output({ ok: false, error: "invalid-recipientId" });
@@ -62,7 +62,7 @@ function resolveTelegramRecipient(context: RepoCliContext): { recipientKind?: "u
 }
 
 
-export async function handleTelegramListRecipients(context: RepoCliContext): Promise<never> {
+export async function handleTelegramListRecipients(context: ToolContext): Promise<never> {
   const query = context.cleanText(context.args.query);
   const kind = context.cleanText(context.args.kind) || (query ? "all" : "groups");
   if (kind !== "groups" && kind !== "users" && kind !== "all") context.output({ ok: false, error: "invalid-recipient-kind" });
@@ -70,11 +70,11 @@ export async function handleTelegramListRecipients(context: RepoCliContext): Pro
 }
 
 
-export async function handleTelegramSendMessage(context: RepoCliContext): Promise<never> {
+export async function handleTelegramSendMessage(context: ToolContext): Promise<never> {
   const content = context.cleanText(context.args.content);
   if (!content) context.output({ ok: false, error: "missing-content" });
   const { recipientId, recipientLabel, mode } = resolveImmediateMessageRecipient(context);
-  context.logInfo(`telegram:send-message: sending to ${recipientLabel}`);
+  context.logInfo(`telegram_send_message: sending to ${recipientLabel}`);
   await logger.info(`telegram tool send_message mode=${mode} recipient=${recipientLabel} chars=${content.length} content=${context.logTextContent(content)}`);
   const result = await deliverTelegramMessage(context, recipientId, content, recipientLabel);
   await logger.info(`telegram tool send_message delivered mode=${mode} recipient=${recipientLabel} messageId=${result.messageId ?? "unknown"}`);
@@ -82,11 +82,11 @@ export async function handleTelegramSendMessage(context: RepoCliContext): Promis
 }
 
 
-export async function handleTelegramSendFile(context: RepoCliContext): Promise<never> {
+export async function handleTelegramSendFile(context: ToolContext): Promise<never> {
   requireOutboundRequester(context);
   const { recipientId, recipientLabel } = resolveTelegramRecipient(context);
   const filePath = context.cleanText(context.args.filePath);
   if (!filePath) context.output({ ok: false, error: "missing-filePath" });
-  context.logInfo(`telegram:send-file: sending ${filePath} to ${recipientLabel}`);
+  context.logInfo(`telegram_send_file: sending ${filePath} to ${recipientLabel}`);
   context.output(await deliverTelegramFile(context, recipientId, filePath, context.cleanText(context.args.caption), recipientLabel));
 }

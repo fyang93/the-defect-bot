@@ -6,20 +6,19 @@ This project uses Pi SDK sessions directly.
 
 ```text
 agent/
-  AGENTS.md                 # human-facing copy of the assistant workspace rules
+  AGENTS.md                 # bot assistant context; injected into bot SDK sessions and just agent
   .pi/
-    AGENTS.md               # loaded by main assistant sessions
     settings.json           # Pi settings and installed packages
     auth.json               # local credentials; ignored by git
     models.json             # local/custom model config; ignored by git
     extensions/
-      defect-bot-tools/     # repository Pi tools backed by repo CLI
+      defect-bot-tools/     # repository Pi tools backed by direct operations
     skills/
       memory/               # durable local memory workflow
       custom-toolbox/       # narrow project helper workflows
 ```
 
-Use `just agent` to open an interactive Pi session with `PI_CODING_AGENT_DIR=agent/.pi` and sessions stored in `agent/.pi/sessions/`.
+Use `just agent` to open an interactive Pi session with `agent/AGENTS.md` injected and sessions stored in `agent/.pi/sessions/`.
 
 ## Runtime lanes
 
@@ -30,17 +29,17 @@ Use `just agent` to open an interactive Pi session with `PI_CODING_AGENT_DIR=age
 | scheduled content | `generateScheduledTaskContent` | web allowlist only | no | Current-information automation content; may use web tools |
 | maintainer | `runMaintenancePass` | no | no | Short maintenance summaries and repository housekeeping text |
 
-The intended direction is to keep **assistant** as the only broad, state-changing agent lane. Composer and maintainer should stay small and avoid loading full `AGENTS.md` unless they explicitly need a broader capability.
+The intended direction is to keep **assistant** as the only broad, state-changing agent lane. Composer and maintainer should stay small and avoid loading `agent/AGENTS.md` unless they explicitly need a broader capability.
 
 ## Pi tool boundary
 
 The assistant should use these tools instead of raw shell commands for canonical bot state:
 
-- `defect_events`: reminders, events, recurring schedules, automations, pause/resume/delete
-- `defect_users`: user records, access levels, pending auth, timezones, durable assistant rules
-- `defect_telegram`: recipient resolution, sends, file sends, scheduled Telegram delivery
+- `event:*`: reminders, events, recurring schedules, automations, pause/resume/delete
+- `user:*`: aliases, person memory links, identity links, timezones, durable assistant rules, pending auth
+- `telegram:*`: recipient listing/search, sends, file sends
 
-These tools call `bun run repo:cli -- <command> <json-payload>` internally, preserving existing deterministic CLI behavior and permission checks.
+These tools call direct deterministic operations under `src/bot/operations/**`; no shell shim is used.
 
 ## Resource loading and startup latency
 
@@ -56,4 +55,4 @@ Local-only files:
 - `agent/.pi/auth.json`
 - `agent/.pi/models.json`
 
-They must not be committed. The bot and `just agent` both use `agent/.pi` as the Pi agent directory.
+They must not be committed. The bot and `just agent` both use `agent/.pi` as the Pi agent directory; `agent/AGENTS.md` is the single bot-assistant context file.

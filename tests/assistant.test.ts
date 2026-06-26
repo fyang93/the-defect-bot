@@ -97,7 +97,7 @@ describe("assistant TTFR and runtime-owned reply publication", () => {
           message: "已查询用户列表",
           answerMode: "needs-execution" as const,
           usedNativeExecution: true,
-          completedActions: ["users:list"],
+          completedActions: ["user:list"],
         };
       },
     } as any;
@@ -157,8 +157,8 @@ describe("assistant TTFR and runtime-owned reply publication", () => {
       cancelled: false,
     };
 
-    const completedActions = ["users:list"];
-    expect(completedActions).toEqual(["users:list"]);
+    const completedActions = ["user:list"];
+    expect(completedActions).toEqual(["user:list"]);
 
     const agentService = {
       runAssistantTurn: async () => ({
@@ -289,7 +289,7 @@ describe("assistant orchestration", () => {
         await delay(30);
         calls.push("aux-reply:先处理");
         calls.push("aux-reply:最终完成");
-        return { message: "最终完成", answerMode: "needs-execution", usedNativeExecution: true, completedActions: ["events:create"] };
+        return { message: "最终完成", answerMode: "needs-execution", usedNativeExecution: true, completedActions: ["event_create"] };
       },
     } as any;
 
@@ -352,7 +352,7 @@ describe("assistant orchestration", () => {
       runAssistantTurn: async (input: { onProgress?: (message: string) => Promise<void> | void }) => {
         await input.onProgress?.("我先确认一下现有记录。");
         await delay(20);
-        return { message: "已经处理好了", answerMode: "needs-execution", usedNativeExecution: true, completedActions: ["users:list"] };
+        return { message: "已经处理好了", answerMode: "needs-execution", usedNativeExecution: true, completedActions: ["user:list"] };
       },
     } as any;
 

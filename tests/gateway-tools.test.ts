@@ -129,19 +129,31 @@ describe("gateway execution history", () => {
 
   test("writer mode rejects tool execution in light text sessions", async () => {
     const service = new AiService(createTestConfig()) as any;
-    installFakePiSession(service, [{ role: "assistant", content: [{ type: "toolCall", name: "telegram:send-message" }, { type: "text", text: "已发送启动问候给管理员。" }] }]);
+    installFakePiSession(service, [{ role: "assistant", content: [{ type: "toolCall", name: "telegram_send_message" }, { type: "text", text: "已发送启动问候给管理员。" }] }]);
 
     await expect(service.generateStartupGreeting({ requesterUserId: 1 })).rejects.toThrow("writer text generation must not execute tools");
+  });
+
+  test("assistant empty output falls back instead of throwing", async () => {
+    const service = new AiService(createTestConfig()) as any;
+    const calls: any[] = [];
+    installFakePiSession(service, [{ role: "assistant", content: [] }], calls);
+
+    const result = await service.runAssistantTurn({ userRequestText: "记录一下李博", accessRole: "admin" });
+
+    expect(calls).toHaveLength(2);
+    expect(result.message).toBe("抱歉，这次没有生成有效回复。请再试一次。");
+    expect(result.usedNativeExecution).toBe(false);
   });
 
   test("assistant records completed actions from Pi SDK tool events", async () => {
     const service = new AiService(createTestConfig()) as any;
     const calls: any[] = [];
-    installFakePiSession(service, [{ role: "assistant", content: [{ type: "text", text: "已创建提醒" }] }], calls, ["telegram:send-message", "events:create"]);
+    installFakePiSession(service, [{ role: "assistant", content: [{ type: "text", text: "已创建提醒" }] }], calls, ["telegram_send_message", "event_create"]);
     const entry = await service.createSession(undefined, "test", "assistant", true);
 
     const result = await service.promptSessionForAssistant(entry.session, "创建提醒：明天下午3点开会", []);
     expect(result.usedNativeExecution).toBe(true);
-    expect(result.completedActions).toEqual(["telegram:send-message", "events:create"]);
+    expect(result.completedActions).toEqual(["telegram_send_message", "event_create"]);
   });
 });

@@ -52,7 +52,7 @@ export type RunAssistantTaskDeps = {
   onReleaseActiveTask: (scopeKey: string, taskId: number) => void;
 };
 
-// Single-lane assistant: executes native capabilities / repo CLI work and runtime publishes current-turn replies.
+// Single-lane assistant: executes native capabilities / direct tool operations and runtime publishes current-turn replies.
 export async function runAssistantTask(deps: RunAssistantTaskDeps): Promise<void> {
   const {
     config,
@@ -140,7 +140,7 @@ export async function runAssistantTask(deps: RunAssistantTaskDeps): Promise<void
     const message = error instanceof Error ? error.message : String(error);
     await logger.warn(`assistant task ${task.id} failed message=${message}`);
     if (isTaskCurrent(task.scopeKey, task.id) && !task.cancelled) {
-      await onSetReaction(ctx, "⚠️");
+      await onSetReaction(ctx, "😢");
     }
   } finally {
     onReleaseActiveTask(task.scopeKey, task.id);

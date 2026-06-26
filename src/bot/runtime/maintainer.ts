@@ -1,2 +1,2 @@
-export { createMaintainerRunner, startMaintainerLoop } from "bot/operations/maintenance/dreaming";
-export type { MaintainerRunner } from "bot/operations/maintenance/dreaming";
+export { createMaintainerRunner, startMaintainerLoop } from "bot/operations/maintenance/deep";
+export type { MaintainerRunner } from "bot/operations/maintenance/deep";

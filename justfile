@@ -6,6 +6,7 @@ default:
 
 alias i := install
 alias s := serve
+alias a := agent
 
 # Install project dependencies.
 install:
@@ -15,6 +16,10 @@ install:
 serve:
     mkdir -p logs; \
     npm run bot
+
+# Open the project Pi assistant workspace interactively.
+agent:
+    cd agent && PI_CODING_AGENT_DIR=.pi PI_CODING_AGENT_SESSION_DIR=.pi/sessions pi --no-context-files --append-system-prompt "$$(cat AGENTS.md)"
 
 # Run manual test suite, including live natural-language tests.
 test:

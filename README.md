@@ -17,7 +17,7 @@ It runs through the Pi SDK, keeps canonical state in the repository, and treats 
 
 ## Architecture
 
-The bot is organized as a small layered system: bot runtime, platform adapters, Pi SDK lanes, Pi tools, repository CLI, domain operations, and records. Repository Pi tools are the assistant-facing deterministic execution boundary; they are backed by the existing repository CLI. Recent deepening work has pulled schedule lifecycle concerns behind `ScheduleEngine`, startup/runtime orchestration behind a bot lifecycle module, and Pi SDK session/resource lifecycle behind internal broker/cache seams.
+The bot is organized as a small layered system: bot runtime, platform adapters, Pi SDK lanes, Pi tools, domain operations, and records. Repository Pi tools are the assistant-facing deterministic execution boundary and call operations directly. Recent deepening work has pulled schedule lifecycle concerns behind `ScheduleEngine`, startup/runtime orchestration behind a bot lifecycle module, and Pi SDK session/resource lifecycle behind internal broker/cache seams.
 
 ```text
 Interaction
@@ -30,7 +30,7 @@ Scheduling
   +-- Assistant lane
   |     main Pi agent for interpretation + execution
   |     |
-  |     +--> Pi tools -> Repository CLI
+  |     +--> Pi tools -> Operations
   |     |      |
   |     |      +--> Operations / Records
   |     |             domain logic and canonical state
@@ -41,10 +41,10 @@ Scheduling
 
 The current conversation path is centered on a single assistant lane:
 
-- bot-side code and repo-CLI code are kept as separate surfaces in `src/bot/**` and `src/cli/**`
+- bot runtime, deterministic operations, and Pi tool backends live under `src/bot/**`
 
 - the assistant interprets the request and performs needed work through Pi tools where deterministic state is involved
-- the current direction is to let runtime code own current-turn reply publication orchestration while deterministic repository actions are exposed to the assistant as Pi tools backed by the repository CLI
+- runtime code owns current-turn reply publication orchestration while deterministic repository actions are exposed as direct Pi tool backends
 - composer/writer tasks such as startup greetings, reminder wording, and reply composition run as narrow no-tools/no-context Pi sessions
 - maintainer tasks stay narrow and should not accidentally gain current-turn delivery or repository mutation powers
 - runtime code keeps waiting-state UI, interruption, short startup coalescing / follow-up merge, and duplicate-publication safeguards
@@ -58,19 +58,19 @@ Short-term conversational context is kept in Pi SDK sessions by scope:
 - **private chat** -> one session per user
 - **group / supergroup** -> one session per chat
 
-Long-term facts, access roles, events, automations, and structured state do **not** rely on model session history. They live in repository state such as `system/users.json`, `system/chats.json`, `system/state.json`, and `system/events.json`. These stores should be managed through deterministic code paths, Pi tools, and the repository CLI instead of prompt-defined persistence protocols. The project-wide engineering rules now live in `AGENTS.md` and `docs/principles.md`.
+Long-term facts, access roles, events, automations, and structured state do **not** rely on model session history. They live in repository state such as `system/users.json`, `system/chats.json`, `system/state.json`, and `system/events.json`. These stores should be managed through deterministic code paths and Pi tools instead of prompt-defined persistence protocols. The project-wide engineering rules now live in `AGENTS.md` and `docs/principles.md`.
 
 ## Agent workspace
 
-Pi agent resources live under `agent/`:
+Pi assistant resources live under `agent/`:
 
-- `agent/.pi/AGENTS.md`: main assistant instructions loaded only by assistant/tool sessions
-- `agent/.pi/extensions/defect-bot-tools`: Pi tools backed by the repository CLI for events, users/auth/rules, and Telegram delivery
+- `agent/AGENTS.md`: bot assistant instructions; injected into both bot SDK assistant sessions and `just agent`
+- `agent/.pi/extensions/defect-bot-tools`: Pi tools backed by direct operations for events, users/auth/rules, and Telegram delivery
 - `agent/.pi/skills/memory`: repository-local durable notes and preferences
 - `agent/.pi/skills/custom-toolbox`: narrow project-specific utility workflows
 - `agent/.pi/auth.json` and `agent/.pi/models.json`: local credentials/model config, ignored by git
 
-Routine deterministic work should use Pi tools instead of re-reading CLI skill wrappers. `just agent` opens an interactive Pi session against this workspace for local assistant debugging.
+Routine deterministic work should use Pi tools instead of shelling out. `just agent` opens an interactive Pi session with `agent/.pi` as the Pi agent directory for local assistant debugging.
 
 See `docs/agent-architecture.md` for the assistant/composer/maintainer lanes and resource-loading rules.
 
@@ -138,7 +138,7 @@ The code currently enforces the allowed-user privacy boundary in the assistant l
 
 The admin may also temporarily allow a `@username` and choose any expiry window. After that, the user only needs to interact with the bot before the temporary authorization expires so the system can link the account and grant access. This can be a private chat, an `@bot` mention in a group, or a reply to the bot in a group.
 
-Delayed Telegram delivery is delegated to the external `at` scheduler through the repository CLI rather than an internal durable queue.
+Delayed Telegram delivery is modeled as scheduled events and delivered by the bot schedule engine.
 
 ## Example usage
 

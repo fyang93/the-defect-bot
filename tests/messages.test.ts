@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { state } from "../src/bot/app/state";
 import type { AppConfig } from "../src/bot/app/types";
-import { CliOutput } from "../src/cli/runtime";
+import { runToolCommand } from "../src/bot/operations/tools/execute";
 import { rememberTelegramChat, rememberTelegramUser } from "../src/bot/telegram/registry";
 import { resolveTelegramTargetUser } from "../src/bot/telegram/targets";
 
@@ -64,44 +64,41 @@ async function createTempConfig(): Promise<{ config: AppConfig; repoRoot: string
   return { config: createTestConfig(repoRoot), repoRoot, originalCwd };
 }
 
-const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+async function runTool(command: string, args: Record<string, unknown>): Promise<Record<string, any>> {
+  return await runToolCommand(command, args) as Record<string, any>;
+}
 
 describe("message delivery flow", () => {
-  test("telegram:send-message requires recipientId", async () => {
+  test("telegram_send_message requires recipientId", async () => {
     const { repoRoot, originalCwd } = await createTempConfig();
     try {
-      const proc = Bun.spawn(["bun", cliPath, "telegram:send-message", JSON.stringify({ content: "hi" })], {
-        cwd: repoRoot,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const stdout = await new Response(proc.stdout).text();
-      const stderr = await new Response(proc.stderr).text();
-      const exitCode = await proc.exited;
-      expect(exitCode).toBe(0);
-      expect(stderr).toContain("[repo-cli]");
-      expect(JSON.parse(stdout)).toEqual({ ok: false, error: "missing-recipientId-for-message" });
+      expect(await runTool("telegram_send_message", { content: "hi" })).toEqual({ ok: false, error: "missing-recipientId-for-message" });
     } finally {
       process.chdir(originalCwd);
       await rm(repoRoot, { recursive: true, force: true });
     }
   });
 
-  test("telegram:send-message still requires outbound privilege for explicit recipientId", async () => {
+  test("telegram_send_message still requires outbound privilege for explicit recipientId", async () => {
     const { repoRoot, originalCwd } = await createTempConfig();
     try {
-      const proc = Bun.spawn(["bun", cliPath, "telegram:send-message", JSON.stringify({ requesterUserId: 200, recipientId: 300, content: "hi" })], {
-        cwd: repoRoot,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const stdout = await new Response(proc.stdout).text();
-      const stderr = await new Response(proc.stderr).text();
-      const exitCode = await proc.exited;
-      expect(exitCode).toBe(0);
-      expect(stderr).toContain("[repo-cli]");
-      expect(JSON.parse(stdout)).toEqual({ ok: false, error: "outbound-delivery-not-allowed" });
+      expect(await runTool("telegram_send_message", { requesterUserId: 200, recipientId: 300, content: "hi" })).toEqual({ ok: false, error: "outbound-delivery-not-allowed" });
     } finally {
+      process.chdir(originalCwd);
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("rememberTelegramUser refreshes stale displayName in users.json", async () => {
+    const { repoRoot, originalCwd } = await createTempConfig();
+    try {
+      await writeFile(path.join(repoRoot, "system", "users.json"), JSON.stringify({ users: { "200": { username: "foo", displayName: "Old Name", accessLevel: "allowed" } } }, null, 2) + "\n", "utf8");
+      state.telegramUserCache["200"] = { username: "foo", firstName: "New", lastName: "Name", displayName: "New Name", lastSeenAt: new Date().toISOString() };
+      rememberTelegramUser({ id: 200, username: "foo", first_name: "New", last_name: "Name" });
+      const users = JSON.parse(await readFile(path.join(repoRoot, "system", "users.json"), "utf8"));
+      expect(users.users["200"].displayName).toBe("New Name");
+    } finally {
+      delete state.telegramUserCache["200"];
       process.chdir(originalCwd);
       await rm(repoRoot, { recursive: true, force: true });
     }
@@ -127,20 +124,10 @@ describe("message delivery flow", () => {
     }
   });
 
-  test("events:create accepts schedule passed as JSON string", async () => {
+  test("event_create accepts schedule passed as JSON string", async () => {
     const { repoRoot, originalCwd } = await createTempConfig();
     try {
-      const proc = Bun.spawn(["bun", cliPath, "events:create", JSON.stringify({ requesterUserId: 1, title: "喝鸡汤", schedule: JSON.stringify({ kind: "once", scheduledAt: "2026-04-10T06:00:00.000Z" }) })], {
-        cwd: repoRoot,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const stdout = await new Response(proc.stdout).text();
-      const stderr = await new Response(proc.stderr).text();
-      expect(await proc.exited).toBe(0);
-      expect(stderr).toContain("[repo-cli]");
-      const jsonStart = stdout.lastIndexOf("\n{") >= 0 ? stdout.lastIndexOf("\n{") + 1 : stdout.indexOf("{");
-      const parsed = JSON.parse(stdout.slice(jsonStart));
+      const parsed = await runTool("event_create", { requesterUserId: 1, title: "喝鸡汤", schedule: JSON.stringify({ kind: "once", scheduledAt: "2026-04-10T06:00:00.000Z" }) });
       expect(parsed.ok).toBe(true);
       expect(parsed.event.title).toBe("喝鸡汤");
     } finally {
@@ -149,20 +136,11 @@ describe("message delivery flow", () => {
     }
   });
 
-  test("auth:add-pending defaults expiresAt in code", async () => {
+  test("auth_add_pending defaults expiresAt in code", async () => {
     const { repoRoot, originalCwd } = await createTempConfig();
     try {
       const startedAt = Date.now();
-      const proc = Bun.spawn(["bun", cliPath, "auth:add-pending", JSON.stringify({ requesterUserId: 1, username: "foo", createdBy: 1 })], {
-        cwd: repoRoot,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const stdout = await new Response(proc.stdout).text();
-      const stderr = await new Response(proc.stderr).text();
-      expect(await proc.exited).toBe(0);
-      expect(stderr).toContain("[repo-cli]");
-      const parsed = JSON.parse(stdout);
+      const parsed = await runTool("auth_add_pending", { requesterUserId: 1, username: "foo", createdBy: 1 });
       expect(parsed.ok).toBe(true);
       expect(typeof parsed.expiresAt).toBe("string");
       const expiresAtMs = Date.parse(parsed.expiresAt);
@@ -174,20 +152,11 @@ describe("message delivery flow", () => {
     }
   });
 
-  test("auth:add-pending accepts durations longer than 24 hours", async () => {
+  test("auth_add_pending accepts durations longer than 24 hours", async () => {
     const { repoRoot, originalCwd } = await createTempConfig();
     try {
       const startedAt = Date.now();
-      const proc = Bun.spawn(["bun", cliPath, "auth:add-pending", JSON.stringify({ requesterUserId: 1, username: "foo", createdBy: 1, durationMinutes: 7 * 24 * 60 })], {
-        cwd: repoRoot,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const stdout = await new Response(proc.stdout).text();
-      const stderr = await new Response(proc.stderr).text();
-      expect(await proc.exited).toBe(0);
-      expect(stderr).toContain("[repo-cli]");
-      const parsed = JSON.parse(stdout);
+      const parsed = await runTool("auth_add_pending", { requesterUserId: 1, username: "foo", createdBy: 1, durationMinutes: 7 * 24 * 60 });
       expect(parsed.ok).toBe(true);
       const expiresAtMs = Date.parse(parsed.expiresAt);
       expect(expiresAtMs).toBeGreaterThan(startedAt + (6 * 24 * 60 * 60 * 1000));
@@ -197,53 +166,32 @@ describe("message delivery flow", () => {
     }
   });
 
-  test("auth:add-pending rejects past or invalid expiresAt", async () => {
+  test("auth_add_pending rejects past or invalid expiresAt", async () => {
     const { repoRoot, originalCwd } = await createTempConfig();
     try {
-      const proc = Bun.spawn(["bun", cliPath, "auth:add-pending", JSON.stringify({ requesterUserId: 1, username: "foo", createdBy: 1, expiresAt: "2000-01-01T00:00:00.000Z" })], {
-        cwd: repoRoot,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const stdout = await new Response(proc.stdout).text();
-      const stderr = await new Response(proc.stderr).text();
-      expect(await proc.exited).toBe(0);
-      expect(stderr).toContain("[repo-cli]");
-      expect(JSON.parse(stdout)).toEqual({ ok: false, error: "invalid-expiresAt" });
+      expect(await runTool("auth_add_pending", { requesterUserId: 1, username: "foo", createdBy: 1, expiresAt: "2000-01-01T00:00:00.000Z" })).toEqual({ ok: false, error: "invalid-expiresAt" });
     } finally {
       process.chdir(originalCwd);
       await rm(repoRoot, { recursive: true, force: true });
     }
   });
 
-  test("users:update-rules adds and removes assistant rules deterministically", async () => {
+  test("user_update_rules adds and removes assistant rules deterministically", async () => {
     const { config, repoRoot, originalCwd } = await createTempConfig();
 
     try {
-      const seed = Bun.spawn(["bun", cliPath, "users:update-rules", JSON.stringify({
+      await runTool("user_update_rules", {
         requesterUserId: 1,
         userId: 200,
         add: ["旧规则", "今后回答前先检查本地记忆"],
-      })], {
-        cwd: repoRoot,
-        stdout: "pipe",
-        stderr: "pipe",
       });
-      await seed.exited;
 
-      const proc = Bun.spawn(["bun", cliPath, "users:update-rules", JSON.stringify({
+      const parsed = await runTool("user_update_rules", {
         requesterUserId: 1,
         userId: 200,
         remove: ["旧规则"],
         add: ["遇到生日提醒先查记忆库"],
-      })], {
-        cwd: repoRoot,
-        stdout: "pipe",
-        stderr: "pipe",
       });
-      const stdout = await new Response(proc.stdout).text();
-      await proc.exited;
-      const parsed = JSON.parse(stdout.trim());
       expect(parsed.ok).toBe(true);
       expect(parsed.user.rules).toEqual(["今后回答前先检查本地记忆", "遇到生日提醒先查记忆库"]);
 
@@ -256,21 +204,14 @@ describe("message delivery flow", () => {
     }
   });
 
-  test("users:set-person-path updates a narrow field deterministically", async () => {
+  test("user_set_person_path updates a narrow field deterministically", async () => {
     const { repoRoot, originalCwd } = await createTempConfig();
     try {
       await mkdir(path.join(repoRoot, "memory", "people"), { recursive: true });
       await mkdir(path.join(repoRoot, "memory", "people", "yang-fan"), { recursive: true });
       await writeFile(path.join(repoRoot, "memory", "people", "yang-fan", "README.md"), "# 羊帆\n", "utf8");
 
-      const proc = Bun.spawn(["bun", cliPath, "users:set-person-path", JSON.stringify({ requesterUserId: 1, userId: 200, personPath: "memory/people/yang-fan/README.md" })], {
-        cwd: repoRoot,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const stdout = await new Response(proc.stdout).text();
-      expect(await proc.exited).toBe(0);
-      const parsed = JSON.parse(stdout);
+      const parsed = await runTool("user_set_person_path", { requesterUserId: 1, userId: 200, personPath: "memory/people/yang-fan/README.md" });
       expect(parsed.ok).toBe(true);
       expect(parsed.user.personPath).toBe("memory/people/yang-fan/README.md");
 
@@ -282,17 +223,34 @@ describe("message delivery flow", () => {
     }
   });
 
-  test("users:set-timezone updates a narrow field deterministically", async () => {
+  test("user_record_person creates memory and links personPath", async () => {
     const { repoRoot, originalCwd } = await createTempConfig();
     try {
-      const tzProc = Bun.spawn(["bun", cliPath, "users:set-timezone", JSON.stringify({ requesterUserId: 1, userId: 200, timezone: "Asia/Tokyo" })], {
-        cwd: repoRoot,
-        stdout: "pipe",
-        stderr: "pipe",
+      const parsed = await runTool("user_record_person", {
+        requesterUserId: 1,
+        userId: 200,
+        name: "李博",
+        aliases: ["李博闻"],
+        facts: ["上海交大博士"],
       });
-      const tzStdout = await new Response(tzProc.stdout).text();
-      expect(await tzProc.exited).toBe(0);
-      const tz = JSON.parse(tzStdout);
+      expect(parsed.ok).toBe(true);
+      expect(parsed.user.personPath).toBe("memory/people/user-200/README.md");
+      const note = await readFile(path.join(repoRoot, "memory", "people", "user-200", "README.md"), "utf8");
+      expect(note).toContain("# 李博");
+      expect(note).toContain("- 上海交大博士");
+      const users = JSON.parse(await readFile(path.join(repoRoot, "system", "users.json"), "utf8"));
+      expect(users.users["200"].personPath).toBe("memory/people/user-200/README.md");
+      expect(users.users["200"].aliases).toEqual(["李博闻", "李博"]);
+    } finally {
+      process.chdir(originalCwd);
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("user_set_timezone updates a narrow field deterministically", async () => {
+    const { repoRoot, originalCwd } = await createTempConfig();
+    try {
+      const tz = await runTool("user_set_timezone", { requesterUserId: 1, userId: 200, timezone: "Asia/Tokyo" });
       expect(tz.ok).toBe(true);
       expect(tz.user.timezone).toBe("Asia/Tokyo");
 
@@ -305,7 +263,7 @@ describe("message delivery flow", () => {
     }
   });
 
-  test("users:list and users:get return ok true on success", async () => {
+  test("user:list and user:get return ok true on success", async () => {
     const { repoRoot, originalCwd } = await createTempConfig();
     try {
       const usersPath = path.join(repoRoot, "system", "users.json");
@@ -313,26 +271,12 @@ describe("message delivery flow", () => {
       users.users["1"] = { displayName: "Admin Test" };
       await writeFile(usersPath, JSON.stringify(users, null, 2) + "\n", "utf8");
 
-      const listProc = Bun.spawn(["bun", cliPath, "users:list", JSON.stringify({ requesterUserId: 1 })], {
-        cwd: repoRoot,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const listStdout = await new Response(listProc.stdout).text();
-      expect(await listProc.exited).toBe(0);
-      const listed = JSON.parse(listStdout);
+      const listed = await runTool("user:list", { requesterUserId: 1 });
       expect(listed.ok).toBe(true);
       expect(typeof listed.users).toBe("object");
       expect(listed.users["1"].timezone).toBe("Asia/Tokyo");
 
-      const getProc = Bun.spawn(["bun", cliPath, "users:get", JSON.stringify({ requesterUserId: 1, userId: 1 })], {
-        cwd: repoRoot,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const getStdout = await new Response(getProc.stdout).text();
-      expect(await getProc.exited).toBe(0);
-      const got = JSON.parse(getStdout);
+      const got = await runTool("user:get", { requesterUserId: 1, userId: 1 });
       expect(got.ok).toBe(true);
       expect(got.userId).toBe(1);
       expect(got.user.timezone).toBe("Asia/Tokyo");

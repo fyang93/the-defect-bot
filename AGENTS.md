@@ -14,19 +14,19 @@ This repository is a local-first Telegram bot backed by the Pi SDK. Keep determi
 ## Architecture map
 
 - Bot runtime: `src/bot/**`
-- Repository CLI and deterministic operations: `src/cli.ts`, `src/bot/operations/**`
+- Deterministic operations and Pi tool backends: `src/bot/operations/**`
 - Pi SDK gateway and lanes: `src/bot/ai/gateway.ts`
 - Prompt-role helpers: `src/bot/ai/prompt.ts`, `src/bot/ai/reply-composer.ts`
 - Telegram adapters: `src/bot/telegram/**`
-- Agent workspace: `agent/.pi/**`
+- Agent workspace: `agent/**` (`agent/.pi/**` for Pi config/resources)
 
 See [docs/agent-architecture.md](docs/agent-architecture.md) for the Pi workspace, assistant/composer/maintainer lanes, and tool loading rules. See [docs/principles.md](docs/principles.md) for project-wide engineering principles.
 
 ## Pi workspace rules
 
-- Runtime Pi resources live under `agent/.pi/`.
+- Runtime Pi config/resources live under `agent/.pi/`; bot assistant instructions live in `agent/AGENTS.md`.
 - Do not commit `agent/.pi/auth.json`, `agent/.pi/models.json`, `agent/.pi/sessions/`, or `agent/.pi/npm/`.
-- Main assistant sessions load `agent/.pi/AGENTS.md`, Pi tools, and skills.
+- Main assistant sessions load `agent/AGENTS.md`, Pi tools, and skills.
 - Composer/writer and maintainer sessions should stay narrow; they should not load full AGENTS context unless intentionally changed.
 - Use `agent/.pi/extensions/defect-bot-tools` for deterministic bot actions instead of asking the model to shell out directly.
 

@@ -17,7 +17,7 @@
 
 ## 架构
 
-整体上，它是一个简洁的分层系统：bot 运行时、平台适配、Pi SDK 通道、Pi tools、仓库 CLI、领域事务、档案。面向 assistant 的确定性边界是 repository Pi tools，底层仍复用现有 repository CLI。最近一轮深挖已经把调度生命周期收口到 `ScheduleEngine`，把启动与运行时编排收口到 bot 生命周期模块，并把 Pi SDK 会话 / 资源生命周期收口到内部的 broker/cache 接缝。
+整体上，它是一个简洁的分层系统：bot 运行时、平台适配、Pi SDK 通道、Pi tools、领域事务、档案。面向 assistant 的确定性边界是 repository Pi tools，底层直接调用确定性 operations。最近一轮深挖已经把调度生命周期收口到 `ScheduleEngine`，把启动与运行时编排收口到 bot 生命周期模块，并把 Pi SDK 会话 / 资源生命周期收口到内部的 broker/cache 接缝。
 
 ```text
 交互
@@ -30,7 +30,7 @@
   +-- Assistant 通道
   |     主 Pi agent 负责理解请求与执行
   |     |
-  |     +--> Pi tools -> Repository CLI
+  |     +--> Pi tools -> Operations
   |     |      |
   |     |      +--> 事务 / 档案
   |     |             领域逻辑与规范持久状态
@@ -41,10 +41,10 @@
 
 当前对话主流程以单助手通道为中心：
 
-- bot 侧代码和 repo CLI 侧代码分别收敛在 `src/bot/**` 与 `src/cli/**`，边界显式分开
+- bot runtime、确定性 operations、Pi tool backend 都收敛在 `src/bot/**`
 
 - 助手直接理解请求；涉及确定性状态时通过 Pi tools 执行
-- 当前方向是由 runtime 代码负责当前回合回复发布，而确定性的仓库动作以 Pi tools 形式暴露给 assistant，底层仍由 repository CLI 执行
+- runtime 代码负责当前回合回复发布，确定性的仓库动作由 Pi tool backend 直接执行
 - composer/writer 任务，例如启动问候、提醒文案、用户可见回复改写，使用窄的 no-tools/no-context Pi session
 - maintainer 任务保持窄职责，不应意外获得当前回合投递或仓库修改能力
 - runtime 代码负责等待态 UI、中断、启动阶段的短暂聚合 / 输入合并，以及避免重复发送
@@ -65,19 +65,19 @@
 - `system/state.json`
 - `system/events.json`
 
-这些状态现在优先通过确定性代码路径、Pi tools 和 repository CLI 管理，而不是继续依赖 prompt 里定义的大型持久化协议。项目级工程原则现在统一写在 `AGENTS.md` 和 `docs/principles.md`。
+这些状态现在优先通过确定性代码路径和 Pi tools 管理，而不是继续依赖 prompt 里定义的大型持久化协议。项目级工程原则现在统一写在 `AGENTS.md` 和 `docs/principles.md`。
 
 ## Agent workspace
 
-Pi agent 资源集中放在 `agent/`：
+Pi assistant 资源集中放在 `agent/`：
 
-- `agent/.pi/AGENTS.md`：主 assistant 指令，只由 assistant/tool session 加载
-- `agent/.pi/extensions/defect-bot-tools`：由 repository CLI 支撑的 Pi tools，覆盖事件、用户/授权/规则和 Telegram 投递
+- `agent/AGENTS.md`：bot assistant 指令；注入 bot SDK assistant session 和 `just agent`
+- `agent/.pi/extensions/defect-bot-tools`：由直接 operations 支撑的 Pi tools，覆盖事件、用户/授权/规则和 Telegram 投递
 - `agent/.pi/skills/memory`：仓库本地长期笔记、偏好与事实
 - `agent/.pi/skills/custom-toolbox`：窄而专用的项目工具流程
 - `agent/.pi/auth.json` 与 `agent/.pi/models.json`：本地凭证 / 模型配置，已被 git 忽略
 
-常规确定性工作应优先使用 Pi tools，而不是重新读取 CLI skill 包装层。`just agent` 会打开指向该 workspace 的交互式 Pi 会话，方便本地调试 assistant。
+常规确定性工作应优先使用 Pi tools，而不是 shell out。`just agent` 会用 `agent/.pi` 作为 Pi agent directory 打开交互式 Pi 会话，方便本地调试 assistant。
 
 assistant / composer / maintainer 通道和资源加载规则见 `docs/agent-architecture.md`。
 
@@ -145,7 +145,7 @@ idle_after_minutes = 15
 
 admin 也可以对某个 `@username` 做临时授权，并指定任意有效期。之后，对方只要在临时授权过期前和 bot 发生一次可识别交互，系统就能关联该账号并授予访问权限。这可以是私聊，也可以是在群里 `@bot`，或者在群里回复 bot 的消息。
 
-Telegram 的延迟投递现在通过 repository CLI 委托给外部 `at` 调度器，而不是项目内部的持久任务队列。
+Telegram 的延迟投递现在建模为 scheduled events，由 bot schedule engine 投递。
 
 ## 使用示例
 

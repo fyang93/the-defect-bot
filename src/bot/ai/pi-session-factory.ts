@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -33,6 +35,7 @@ export class PiSessionFactory {
 
   constructor(private readonly deps: {
     config: AppConfig;
+    cwd: () => string;
     agentDir: () => string;
     authStorage: AuthStorage;
     modelRegistry: ModelRegistry;
@@ -57,7 +60,7 @@ export class PiSessionFactory {
     const selected = this.deps.selectedModel();
     const { loader, settingsManager } = await this.getResourceLoader(role, useTools, options);
     const { session } = await createAgentSession({
-      cwd: this.deps.config.paths.repoRoot,
+      cwd: this.deps.cwd(),
       agentDir: this.deps.agentDir(),
       authStorage: this.deps.authStorage,
       modelRegistry: this.deps.modelRegistry,
@@ -69,8 +72,14 @@ export class PiSessionFactory {
       tools: options.toolAllowlist,
     });
     if (scopeLabel?.trim()) session.setSessionName(scopeLabel.trim());
-    await logger.info(`pi sdk session created ms=${Date.now() - startedAt} scope=${JSON.stringify(scopeKey || "global")} title=${JSON.stringify(scopeLabel?.trim() || "")} role=${role} tools=${useTools}`);
+    const toolNames = options.toolAllowlist?.join(",") || (useTools ? "default" : "none");
+    await logger.info(`pi sdk session created ms=${Date.now() - startedAt} scope=${JSON.stringify(scopeKey || "global")} title=${JSON.stringify(scopeLabel?.trim() || "")} role=${role} tools=${useTools} toolNames=${JSON.stringify(toolNames)}`);
     return { sessionId: session.sessionId, session };
+  }
+
+  private assistantAgentsFile(): { path: string; content: string } | null {
+    const filePath = path.join(this.deps.cwd(), "AGENTS.md");
+    return existsSync(filePath) ? { path: filePath, content: readFileSync(filePath, "utf8") } : null;
   }
 
   private getResourceLoader(role: PiPromptRole, useTools: boolean, options: CreateSessionOptions = {}): Promise<ResourceBundle> {
@@ -87,7 +96,7 @@ export class PiSessionFactory {
         retry: { enabled: true, maxRetries: 2 },
       });
       const loader = new DefaultResourceLoader({
-        cwd: this.deps.config.paths.repoRoot,
+        cwd: this.deps.cwd(),
         agentDir: this.deps.agentDir(),
         settingsManager,
         systemPromptOverride: () => this.deps.systemPromptForRole(role),
@@ -96,6 +105,12 @@ export class PiSessionFactory {
         noSkills,
         noPromptTemplates: true,
         noContextFiles,
+        agentsFilesOverride: noContextFiles
+          ? undefined
+          : () => {
+              const assistantAgents = this.assistantAgentsFile();
+              return { agentsFiles: assistantAgents ? [assistantAgents] : [] };
+            },
       });
       await loader.reload();
       const extensions = loader.getExtensions().extensions.length;

@@ -54,7 +54,7 @@ function createTestConfig(repoRoot: string): AppConfig {
 }
 
 async function createTempEnv(): Promise<{ config: AppConfig; repoRoot: string }> {
-  // Use the real project root so Pi SDK tools can find repository CLI aliases.
+  // Use the real project root so Pi SDK tools can find repository state and config.
   // System files are backed up and restored after the test.
   const repoRoot = hostRepoRoot;
   await mkdir(path.join(repoRoot, "system"), { recursive: true });
@@ -186,25 +186,25 @@ async function main() {
   // 1. Simple greeting — no tools
   await run("简单问候", "你好");
 
-  // 2. List schedules — events:list
+  // 2. List schedules — event_list
   await run("查看提醒列表", "查看当前提醒列表");
 
-  // 3. Create schedule — events:create
+  // 3. Create schedule — event_create
   await run("创建提醒", "创建提醒：明天下午3点开会");
 
-  // 4. Pause schedule — events:pause
+  // 4. Pause schedule — event_pause
   await run("暂停提醒", "暂停开会提醒");
 
-  // 5. Resume schedule — events:resume
+  // 5. Resume schedule — event_resume
   await run("恢复提醒", "恢复开会提醒");
 
-  // 6. Delete schedule — events:delete
+  // 6. Delete schedule — event_delete
   await run("删除提醒", "删除开会提醒");
 
-  // 7. List users — users:list
+  // 7. List users — user:list
   await run("查看用户列表", "查看用户列表");
 
-  // 8. Set access level — users:set-access
+  // 8. Set access level — user:set-access
   await run("设置用户权限", "把 test_rain 设为 trusted", {
     setup: async () => {
       rememberTelegramUser({ id: 8631425224, username: "test_rain", first_name: "测试", last_name: "雨" });
@@ -214,7 +214,7 @@ async function main() {
   // 9. List tasks — (removed-internal-tool) (list)
   await run("查看任务队列", "查看当前任务队列");
 
-  // 10. Runtime-state mutation kept model-visible only for temporary authorization — auth:add-pending
+  // 10. Runtime-state mutation kept model-visible only for temporary authorization — auth_add_pending
   await run("查看运行状态", "查看当前运行状态");
 
   // 11. File registry — (removed-internal-tool)

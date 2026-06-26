@@ -59,14 +59,14 @@ const scenarios: Array<{ name: string; run: (config: AppConfig, agentService: Ai
     },
   },
   {
-    name: "2. 查看提醒列表 (events:list)",
+    name: "2. 查看提醒列表 (event_list)",
     run: async (config, agentService) => {
       const result = await runAssistant(config, agentService, "查看当前提醒列表");
       await log({ scenario: "查看提醒列表", result: { message: result.message, answerMode: result.answerMode, usedNativeExecution: result.usedNativeExecution, completedActions: result.completedActions } });
     },
   },
   {
-    name: "3. 创建提醒 (events:create)",
+    name: "3. 创建提醒 (event_create)",
     run: async (config, agentService) => {
       const result = await runAssistant(config, agentService, "创建提醒：明天下午3点开会");
       const schedules = await readEventRecords(config);
@@ -74,7 +74,7 @@ const scenarios: Array<{ name: string; run: (config: AppConfig, agentService: Ai
     },
   },
   {
-    name: "4. 暂停提醒 (events:pause)",
+    name: "4. 暂停提醒 (event_pause)",
     run: async (config, agentService) => {
       const result = await runAssistant(config, agentService, "暂停开会提醒");
       const schedules = await readEventRecords(config);
@@ -82,7 +82,7 @@ const scenarios: Array<{ name: string; run: (config: AppConfig, agentService: Ai
     },
   },
   {
-    name: "5. 恢复提醒 (events:resume)",
+    name: "5. 恢复提醒 (event_resume)",
     run: async (config, agentService) => {
       const result = await runAssistant(config, agentService, "恢复开会提醒");
       const schedules = await readEventRecords(config);
@@ -90,7 +90,7 @@ const scenarios: Array<{ name: string; run: (config: AppConfig, agentService: Ai
     },
   },
   {
-    name: "6. 删除提醒 (events:delete)",
+    name: "6. 删除提醒 (event_delete)",
     run: async (config, agentService) => {
       const result = await runAssistant(config, agentService, "删除开会提醒");
       const schedules = await readEventRecords(config);
@@ -98,14 +98,14 @@ const scenarios: Array<{ name: string; run: (config: AppConfig, agentService: Ai
     },
   },
   {
-    name: "7. 查看用户列表 (users:list)",
+    name: "7. 查看用户列表 (user:list)",
     run: async (config, agentService) => {
       const result = await runAssistant(config, agentService, "查看用户列表");
       await log({ scenario: "查看用户列表", result: { message: result.message, answerMode: result.answerMode, usedNativeExecution: result.usedNativeExecution, completedActions: result.completedActions } });
     },
   },
   {
-    name: "8. 设置用户权限 (users:set-access)",
+    name: "8. 设置用户权限 (user:set-access)",
     run: async (config, agentService) => {
       rememberTelegramUser({ id: 8631425224, username: "test_rain", first_name: "测试", last_name: "雨" });
       const result = await runAssistant(config, agentService, "把 test_rain 设为 trusted");
@@ -121,7 +121,7 @@ const scenarios: Array<{ name: string; run: (config: AppConfig, agentService: Ai
     },
   },
   {
-    name: "10. 查看临时授权（auth:add-pending）",
+    name: "10. 查看临时授权（auth_add_pending）",
     run: async (config, agentService) => {
       const result = await runAssistant(config, agentService, "查看当前运行状态");
       await log({ scenario: "查看运行状态", result: { message: result.message, answerMode: result.answerMode, usedNativeExecution: result.usedNativeExecution, completedActions: result.completedActions } });

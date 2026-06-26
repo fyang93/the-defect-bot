@@ -298,13 +298,13 @@ describe("scenario 4a: schedule creation", () => {
         message: "已设置提醒",
         answerMode: "needs-execution",
         usedNativeExecution: true,
-        completedActions: ["events:create"],
+        completedActions: ["event_create"],
       },
       auxiliaryReplyCalls: ["aux-reply:好的，已设置今晚9点提醒你喝水"],
     });
 
-    const agentResult = { completedActions: ["events:create"] };
-    expect(agentResult.completedActions).toContain("events:create");
+    const agentResult = { completedActions: ["event_create"] };
+    expect(agentResult.completedActions).toContain("event_create");
     expect(calls.filter((c) => c.startsWith("reply:")).length).toBeGreaterThan(0);
   });
 });
@@ -322,7 +322,7 @@ describe("scenario 4b: schedule query", () => {
         message: "查询完成",
         answerMode: "needs-execution",
         usedNativeExecution: true,
-        completedActions: ["events:create"],
+        completedActions: ["event_create"],
       },
       auxiliaryReplyCalls: ["aux-reply:你有3个提醒..."],
     });
@@ -346,7 +346,7 @@ describe("scenario 4c: schedule deletion", () => {
         message: "已删除",
         answerMode: "needs-execution",
         usedNativeExecution: true,
-        completedActions: ["events:create"],
+        completedActions: ["event_create"],
       },
       auxiliaryReplyCalls: ["aux-reply:已删除提醒"],
     });
@@ -369,7 +369,7 @@ describe("scenario 4d: schedule target restriction", () => {
         message: "已设置",
         answerMode: "needs-execution",
         usedNativeExecution: true,
-        completedActions: ["events:create"],
+        completedActions: ["event_create"],
       },
     });
 
@@ -404,10 +404,10 @@ describe("scenario 5: scheduled message send (admin)", () => {
 });
 
 // ===========================================================================
-// Scenario 6a: Message forwarding (admin) — records telegram:send-message
+// Scenario 6a: Message forwarding (admin) — records telegram_send_message
 // ===========================================================================
 describe("scenario 6a: message forwarding (admin)", () => {
-  test("admin can forward messages and record telegram:send-message", async () => {
+  test("admin can forward messages and record telegram_send_message", async () => {
     const config = await createTempConfig();
     const { capturedInput } = await runScenario({
       config,
@@ -417,7 +417,7 @@ describe("scenario 6a: message forwarding (admin)", () => {
         message: "已转发",
         answerMode: "needs-execution",
         usedNativeExecution: true,
-        completedActions: ["telegram:send-message"],
+        completedActions: ["telegram_send_message"],
       },
     });
 
@@ -454,10 +454,10 @@ describe("scenario 6b: message forwarding (allowed)", () => {
 });
 
 // ===========================================================================
-// Scenario 7: Recurring task (automation) — admin records events:create
+// Scenario 7: Recurring task (automation) — admin records event_create
 // ===========================================================================
 describe("scenario 7: recurring task creation (admin)", () => {
-  test("admin creating a recurring task records events:create and yields a visible reply", async () => {
+  test("admin creating a recurring task records event_create and yields a visible reply", async () => {
     const config = await createTempConfig();
     const { calls } = await runScenario({
       config,
@@ -467,7 +467,7 @@ describe("scenario 7: recurring task creation (admin)", () => {
         message: "已创建循环提醒",
         answerMode: "needs-execution",
         usedNativeExecution: true,
-        completedActions: ["events:create"],
+        completedActions: ["event_create"],
       },
       auxiliaryReplyCalls: ["aux-reply:好的，已设置每日8点提醒你跑步"],
     });
@@ -478,10 +478,10 @@ describe("scenario 7: recurring task creation (admin)", () => {
 });
 
 // ===========================================================================
-// Scenario 8: Admin temporary authorization — records auth:add-pending
+// Scenario 8: Admin temporary authorization — records auth_add_pending
 // ===========================================================================
 describe("scenario 8: admin temporary authorization", () => {
-  test("admin granting temporary access records auth:add-pending and yields a visible reply", async () => {
+  test("admin granting temporary access records auth_add_pending and yields a visible reply", async () => {
     const config = await createTempConfig();
     const { capturedInput } = await runScenario({
       config,
@@ -491,7 +491,7 @@ describe("scenario 8: admin temporary authorization", () => {
         message: "已授权",
         answerMode: "needs-execution",
         usedNativeExecution: true,
-        completedActions: ["auth:add-pending"],
+        completedActions: ["auth_add_pending"],
       },
     });
 
@@ -500,10 +500,10 @@ describe("scenario 8: admin temporary authorization", () => {
 });
 
 // ===========================================================================
-// Scenario 9a: Admin modifies permissions — records users:set-access
+// Scenario 9a: Admin modifies permissions — records user:set-access
 // ===========================================================================
 describe("scenario 9a: admin modifies permissions", () => {
-  test("admin modifying user permissions records users:set-access and yields a visible reply", async () => {
+  test("admin modifying user permissions records user:set-access and yields a visible reply", async () => {
     const config = await createTempConfig();
     const { capturedInput } = await runScenario({
       config,
@@ -513,7 +513,7 @@ describe("scenario 9a: admin modifies permissions", () => {
         message: "已修改权限",
         answerMode: "needs-execution",
         usedNativeExecution: true,
-        completedActions: ["users:set-access"],
+        completedActions: ["user:set-access"],
       },
     });
 
@@ -655,7 +655,7 @@ describe("cross-cutting: reaction and task lifecycle", () => {
         message: "done",
         answerMode: "needs-execution",
         usedNativeExecution: true,
-        completedActions: ["events:create"],
+        completedActions: ["event_create"],
       },
     });
 
@@ -734,7 +734,7 @@ describe("TTFR measurement", () => {
           message: "已设置",
           answerMode: "needs-execution" as const,
           usedNativeExecution: true,
-          completedActions: ["events:create"],
+          completedActions: ["event_create"],
         };
       },
     } as any;
@@ -815,7 +815,7 @@ describe("scenario 12b: agent context carries user preferences", () => {
         message: "已设置",
         answerMode: "needs-execution",
         usedNativeExecution: true,
-        completedActions: ["events:create"],
+        completedActions: ["event_create"],
       },
     });
 
@@ -878,7 +878,7 @@ describe("scenario 13: schedule CRUD for all roles", () => {
         message: "已设置提醒",
         answerMode: "needs-execution",
         usedNativeExecution: true,
-        completedActions: ["events:create"],
+        completedActions: ["event_create"],
       },
       auxiliaryReplyCalls: ["aux-reply:好的，已设置明天早上8点提醒你开会"],
     });
@@ -920,7 +920,7 @@ describe("scenario 13: schedule CRUD for all roles", () => {
         message: "已设置提醒",
         answerMode: "needs-execution",
         usedNativeExecution: true,
-        completedActions: ["events:create"],
+        completedActions: ["event_create"],
       },
       auxiliaryReplyCalls: ["aux-reply:好的，已设置下午3点提醒你喝水"],
     });
@@ -965,7 +965,7 @@ describe("scenario 14: trusted user outbound messaging", () => {
         message: "已转发",
         answerMode: "needs-execution",
         usedNativeExecution: true,
-        completedActions: ["telegram:send-message"],
+        completedActions: ["telegram_send_message"],
       },
       auxiliaryReplyCalls: ["aux-reply:已转发消息给 Allowed User"],
     });
@@ -1100,7 +1100,7 @@ describe("scenario 16: preferences in memory CRUD and application", () => {
         message: "已设置",
         answerMode: "needs-execution",
         usedNativeExecution: true,
-        completedActions: ["events:create"],
+        completedActions: ["event_create"],
       },
       auxiliaryReplyCalls: ["aux-reply:好的，已设置会议提醒（根据你的偏好，已同时设置提前一天的预提醒）"],
     });

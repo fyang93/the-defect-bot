@@ -117,6 +117,7 @@ export function rememberTelegramUser(user: TelegramUserInput | null | undefined,
   const languageCode = cleanOptionalText(user?.language_code);
   const key = String(userId);
   const previous = state.telegramUserCache[key];
+  const canonical = resolveUser(repoRoot(), key);
   const lastSeenAt = new Date().toISOString();
   const next = {
     username,
@@ -133,7 +134,11 @@ export function rememberTelegramUser(user: TelegramUserInput | null | undefined,
     || previous.displayName !== next.displayName
     || previous.languageCode !== next.languageCode;
   state.telegramUserCache[key] = changed ? next : { ...previous, lastSeenAt };
-  if (changed || !previous) {
+  const canonicalChanged = !canonical
+    || canonical.username !== username
+    || canonical.displayName !== displayName
+    || canonical.languageCode !== languageCode;
+  if (changed || canonicalChanged || !previous) {
     upsertUserFile(key, { username, displayName, lastSeenAt, languageCode });
   }
   enqueueSync({

@@ -9,17 +9,17 @@ import type { AppConfig } from "bot/app/types";
 import { AiService } from "bot/ai";
 import { ScheduleEngine } from "bot/operations/events";
 
-export type CliArgs = Record<string, unknown>;
+export type ToolArgs = Record<string, unknown>;
 
-export class CliOutput extends Error {
+export class ToolOutput extends Error {
   constructor(readonly value: unknown) {
-    super("cli-output");
+    super("tool-output");
   }
 }
 
-export type RepoCliContext = {
+export type ToolContext = {
   config: AppConfig;
-  args: CliArgs;
+  args: ToolArgs;
   scheduleEngine: ScheduleEngine;
   output: (value: unknown) => never;
   nowIso: () => string;
@@ -88,7 +88,7 @@ export function summarizeArgsForLog(value: unknown): string {
   }
 }
 
-export function appendCliLogLine(config: AppConfig, level: "INFO" | "WARN" | "ERROR", message: string): void {
+export function appendToolLogLine(config: AppConfig, level: "INFO" | "WARN" | "ERROR", message: string): void {
   const line = `[${new Date().toISOString()}] [${level}] ${message}\n`;
   try {
     mkdirSync(path.dirname(config.paths.logFile), { recursive: true });
@@ -98,24 +98,24 @@ export function appendCliLogLine(config: AppConfig, level: "INFO" | "WARN" | "ER
   }
 }
 
-export function emitCliTerminalLine(config: AppConfig, level: "INFO" | "WARN" | "ERROR", message: string): void {
-  const line = `[repo-cli] ${message}`;
+export function emitToolTerminalLine(config: AppConfig, level: "INFO" | "WARN" | "ERROR", message: string): void {
+  const line = `[bot-tool] ${message}`;
   try {
     process.stderr.write(`${line}\n`);
   } catch {
     // ignore terminal logging failures
   }
-  appendCliLogLine(config, level, `repo cli terminal ${message}`);
+  appendToolLogLine(config, level, `tool operation terminal ${message}`);
 }
 
-export async function initializeRepoCli(args: CliArgs): Promise<RepoCliContext> {
-  const config = loadConfig();
+export async function initializeToolContext(args: ToolArgs, configPath?: string): Promise<ToolContext> {
+  const config = loadConfig(configPath);
   await loadPersistentState(config.paths.stateFile);
   await ensureAdminUserAccessLevel(config);
   const scheduleEngine = new ScheduleEngine(config, new AiService(config));
 
   const output = (value: unknown): never => {
-    throw new CliOutput(value);
+    throw new ToolOutput(value);
   };
 
   const readJson = <T>(relativePath: string, fallback: T): T => {
@@ -169,13 +169,13 @@ export async function initializeRepoCli(args: CliArgs): Promise<RepoCliContext> 
     resolveUserLookup,
     usersDoc,
     logTextContent,
-    logInfo: (message: string) => emitCliTerminalLine(config, "INFO", message),
-    logWarn: (message: string) => emitCliTerminalLine(config, "WARN", message),
-    logError: (message: string) => emitCliTerminalLine(config, "ERROR", message),
+    logInfo: (message: string) => emitToolTerminalLine(config, "INFO", message),
+    logWarn: (message: string) => emitToolTerminalLine(config, "WARN", message),
+    logError: (message: string) => emitToolTerminalLine(config, "ERROR", message),
   };
 }
 
-function resolvePendingAuthorizationExpiresAt(args: CliArgs, now = Date.now()): string | null {
+function resolvePendingAuthorizationExpiresAt(args: ToolArgs, now = Date.now()): string | null {
   const explicitExpiresAt = cleanText(args.expiresAt);
   if (explicitExpiresAt) {
     const parsed = Date.parse(explicitExpiresAt);
@@ -189,11 +189,11 @@ function resolvePendingAuthorizationExpiresAt(args: CliArgs, now = Date.now()): 
   return new Date(now + 24 * 60 * 60 * 1000).toISOString();
 }
 
-export async function addPendingAuthorization(context: RepoCliContext): Promise<void> {
+export async function addPendingAuthorization(context: ToolContext): Promise<void> {
   const { args, output, requireAdminRequester, cleanText, asInt, nowIso, config } = context;
   requireAdminRequester();
   const username = cleanText(args.username);
-  context.logInfo(`auth:add-pending: creating pending authorization for ${username || "unknown"}`);
+  context.logInfo(`auth_add_pending: creating pending authorization for ${username || "unknown"}`);
   const createdBy = asInt(args.createdBy);
   const expiresAt = resolvePendingAuthorizationExpiresAt(args);
   if (!username || !createdBy) output({ ok: false, error: "missing-username-or-createdBy" });
@@ -203,6 +203,6 @@ export async function addPendingAuthorization(context: RepoCliContext): Promise<
   output({ ok: true, pendingAuthorizations: state.pendingAuthorizations, expiresAt });
 }
 
-export async function logCliInvocation(config: AppConfig, command: string, rawDomain: string, args: CliArgs): Promise<void> {
-  appendCliLogLine(config, "INFO", `repo cli invoke command=${command} raw=${rawDomain} args=${summarizeArgsForLog(args)}`);
+export async function logToolInvocation(config: AppConfig, command: string, rawDomain: string, args: ToolArgs): Promise<void> {
+  appendToolLogLine(config, "INFO", `tool operation invoke command=${command} raw=${rawDomain} args=${summarizeArgsForLog(args)}`);
 }

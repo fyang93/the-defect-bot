@@ -4,7 +4,6 @@
   "type": "module",
   "packageManager": "npm@10",
   "scripts": {
-    "repo:cli": "tsx --tsconfig tsconfig.json src/cli.ts",
     "bot": "tsx --tsconfig tsconfig.json src/bot/main.ts",
     "dev": "tsx watch --tsconfig tsconfig.json src/bot/main.ts",
     "check": "tsc -p tsconfig.json",

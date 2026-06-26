@@ -1,54 +1,10 @@
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
+import { runToolCommand } from "../../../../src/bot/operations/tools/execute.ts";
 
-function repoRootFromCwd(cwd = process.cwd()): string {
-  let current = resolve(cwd);
-  while (true) {
-    if (existsSync(join(current, "package.json")) && existsSync(join(current, "src", "cli.ts"))) return current;
-    const parent = dirname(current);
-    if (parent === current) return resolve(cwd);
-    current = parent;
-  }
-}
-
-type SpawnResult = { code: number | null; stdout: string; stderr: string };
-
-function spawnCollect(command: string, args: string[], options: { cwd: string; signal?: AbortSignal }): Promise<SpawnResult> {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, args, { cwd: options.cwd, signal: options.signal });
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (chunk) => { stdout += String(chunk); });
-    child.stderr?.on("data", (chunk) => { stderr += String(chunk); });
-    child.on("error", (error) => reject(error));
-    child.on("close", (code) => resolvePromise({ code, stdout, stderr }));
-  });
-}
-
-function packageRunner(): { command: string; argsPrefix: string[] } {
-  return process.versions.bun
-    ? { command: "bun", argsPrefix: ["run", "repo:cli", "--"] }
-    : { command: "npm", argsPrefix: ["run", "repo:cli", "--"] };
-}
-
-async function runRepoCommand(command: string, payload: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
-  const root = repoRootFromCwd();
-  const runner = packageRunner();
-  const result = await spawnCollect(runner.command, [...runner.argsPrefix, command, JSON.stringify(payload)], { cwd: root, signal });
-  if (result.code !== 0) {
-    const message = result.stderr.trim() || result.stdout.trim() || `repo:cli ${command} exited with ${result.code}`;
-    throw new Error(message);
-  }
-  const stdout = result.stdout.trim();
-  try {
-    return stdout ? JSON.parse(stdout) : { ok: true };
-  } catch {
-    return { ok: true, text: stdout };
-  }
-}
+const configPath = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../config.toml");
 
 function toolResult(value: unknown) {
   return {
@@ -57,127 +13,182 @@ function toolResult(value: unknown) {
   };
 }
 
-function atomicTool(name: string, label: string, description: string, parameters: any, command: string) {
+function tool(name: string, label: string, description: string, parameters: any, command: string) {
   return defineTool({
     name,
     label,
     description,
     parameters,
-    async execute(_toolCallId, params, signal) {
-      return toolResult(await runRepoCommand(command, params as Record<string, unknown>, signal));
+    async execute(_toolCallId, params) {
+      return toolResult(await runToolCommand(command, params as Record<string, unknown>, { configPath }));
     },
   });
 }
 
-const optionalRequester = Type.Optional(Type.Number({ description: "Telegram user id of the requester for permission checks." }));
 const recipientKind = Type.Optional(Type.Union([Type.Literal("groups"), Type.Literal("users"), Type.Literal("all")], { default: "groups" }));
+const accessLevel = Type.Union([Type.Literal("allowed"), Type.Literal("trusted")]);
+const eventMatch = Type.Optional(Type.Record(Type.String(), Type.Any()));
+const eventChanges = Type.Optional(Type.Record(Type.String(), Type.Any()));
 
-const defectEvents = defineTool({
-  name: "defect_events",
-  label: "Defect Events",
-  description: "Create/list/get/update/pause/resume/delete reminders, events, routines, and automations. This remains a compact event-command tool because event payloads are structured and already deterministic.",
-  parameters: Type.Object({
-    command: Type.Union([
-      Type.Literal("events:list"),
-      Type.Literal("events:get"),
-      Type.Literal("events:create"),
-      Type.Literal("events:update"),
-      Type.Literal("events:delete"),
-      Type.Literal("events:pause"),
-      Type.Literal("events:resume"),
-    ], { default: "events:list" }),
-    payload: Type.Optional(Type.Record(Type.String(), Type.Any(), { description: "Event command payload." })),
+const eventList = tool(
+  "event_list",
+  "List Events",
+  "List visible reminders, events, routines, and automations.",
+  Type.Object({ requesterUserId: Type.Optional(Type.Number()), match: eventMatch }),
+  "event_list",
+);
+
+const eventGet = tool(
+  "event_get",
+  "Get Event",
+  "Get one event by eventId or match filters. If ambiguous, inspect returned candidates and ask the user.",
+  Type.Object({ requesterUserId: Type.Optional(Type.Number()), eventId: Type.Optional(Type.String()), match: eventMatch }),
+  "event_get",
+);
+
+const eventCreate = tool(
+  "event_create",
+  "Create Event",
+  "Create a reminder, event, routine, scheduled Telegram message, or automation.",
+  Type.Object({
+    requesterUserId: Type.Optional(Type.Number()),
+    title: Type.String(),
+    note: Type.Optional(Type.String()),
+    targetUserId: Type.Optional(Type.Number()),
+    targetChatId: Type.Optional(Type.Number()),
+    timezone: Type.Optional(Type.String()),
+    schedule: Type.Record(Type.String(), Type.Any()),
+    category: Type.Optional(Type.String()),
+    specialKind: Type.Optional(Type.String()),
+    timeSemantics: Type.Optional(Type.String()),
+    reminders: Type.Optional(Type.Array(Type.Record(Type.String(), Type.Any()))),
   }),
-  async execute(_toolCallId, params, signal) {
-    return toolResult(await runRepoCommand(params.command, params.payload ?? {}, signal));
-  },
-});
+  "event_create",
+);
 
-const telegramListRecipients = atomicTool(
+const eventUpdate = tool(
+  "event_update",
+  "Update Event",
+  "Update matched events. Prefer exact eventId or explicit ids when available.",
+  Type.Object({ requesterUserId: Type.Optional(Type.Number()), match: eventMatch, changes: eventChanges }),
+  "event_update",
+);
+
+const eventDelete = tool(
+  "event_delete",
+  "Delete Event",
+  "Delete matched events. Prefer exact eventId or explicit ids when available.",
+  Type.Object({ requesterUserId: Type.Optional(Type.Number()), match: eventMatch }),
+  "event_delete",
+);
+
+const eventPause = tool(
+  "event_pause",
+  "Pause Event",
+  "Pause matched events.",
+  Type.Object({ requesterUserId: Type.Optional(Type.Number()), match: eventMatch }),
+  "event_pause",
+);
+
+const eventResume = tool(
+  "event_resume",
+  "Resume Event",
+  "Resume matched events.",
+  Type.Object({ requesterUserId: Type.Optional(Type.Number()), match: eventMatch }),
+  "event_resume",
+);
+
+const telegramListRecipients = tool(
   "telegram_list_recipients",
   "List Telegram Recipients",
   "List known Telegram recipients, optionally filtered by name/alias/username/title. If one result, use its recipientId; if multiple, ask the user to choose; if empty, say no recipient was found or add an alias after clarification.",
   Type.Object({ query: Type.Optional(Type.String({ description: "Optional name, alias, username, or group title filter, e.g. 李博 or 全流程AI." })), kind: recipientKind }),
-  "telegram:list-recipients",
+  "telegram_list_recipients",
 );
 
-
-const telegramSendMessage = atomicTool(
+const telegramSendMessage = tool(
   "telegram_send_message",
   "Send Telegram Message",
   "Send content to a resolved Telegram recipientId. Requires trusted/admin requesterUserId. Never use this to duplicate the current-turn reply back to the current chat.",
-  Type.Object({
-    requesterUserId: Type.Number(),
-    recipientId: Type.Number(),
-    recipientLabel: Type.Optional(Type.String()),
-    content: Type.String(),
-  }),
-  "telegram:send-message",
+  Type.Object({ requesterUserId: Type.Number(), recipientId: Type.Number(), recipientLabel: Type.Optional(Type.String()), content: Type.String() }),
+  "telegram_send_message",
 );
 
-const telegramSendFile = atomicTool(
+const telegramSendFile = tool(
   "telegram_send_file",
   "Send Telegram File",
   "Send a local repo file to a resolved Telegram recipientId. Requires trusted/admin requesterUserId.",
-  Type.Object({
-    requesterUserId: Type.Number(),
-    recipientId: Type.Number(),
-    recipientLabel: Type.Optional(Type.String()),
-    filePath: Type.String(),
-    caption: Type.Optional(Type.String()),
-  }),
-  "telegram:send-file",
+  Type.Object({ requesterUserId: Type.Number(), recipientId: Type.Number(), recipientLabel: Type.Optional(Type.String()), filePath: Type.String(), caption: Type.Optional(Type.String()) }),
+  "telegram_send_file",
 );
 
-const usersAddAlias = atomicTool(
+const userAddAlias = tool(
   "user_add_alias",
   "Add User Alias",
   "Persist a learned canonical alias for a Telegram user id. Use after resolving or after user clarification.",
   Type.Object({ requesterUserId: Type.Number(), userId: Type.Number(), alias: Type.String() }),
-  "users:add-alias",
+  "user_add_alias",
 );
 
+const userRecordPerson = tool(
+  "user_record_person",
+  "Record User Person Memory",
+  "Create or update a memory/people README for a Telegram user, record durable facts there, and link system/users.json personPath. Use this when the user asks to remember who a Telegram user is or gives biographical facts.",
+  Type.Object({ requesterUserId: Type.Number(), userId: Type.Number(), name: Type.Optional(Type.String()), aliases: Type.Optional(Type.Array(Type.String())), facts: Type.Optional(Type.Array(Type.String())), personPath: Type.Optional(Type.String()) }),
+  "user_record_person",
+);
 
-const userSetTimezone = atomicTool(
+const userSetTimezone = tool(
   "user_set_timezone",
   "Set User Timezone",
   "Set a user's timezone.",
   Type.Object({ requesterUserId: Type.Number(), userId: Type.Number(), timezone: Type.String() }),
-  "users:set-timezone",
+  "user_set_timezone",
 );
 
-const userSetPersonPath = atomicTool(
+const userSetPersonPath = tool(
   "user_set_person_path",
   "Set User Person Path",
   "Link a Telegram user to a memory/people README path.",
   Type.Object({ requesterUserId: Type.Number(), userId: Type.Number(), personPath: Type.String() }),
-  "users:set-person-path",
+  "user_set_person_path",
 );
 
-const userUpdateRules = atomicTool(
+const userUpdateRules = tool(
   "user_update_rules",
   "Update User Rules",
   "Add and/or remove durable future-facing assistant rules for a user. To edit a rule, remove the old text and add the new text in one call.",
   Type.Object({ requesterUserId: Type.Number(), userId: Type.Optional(Type.Number()), add: Type.Optional(Type.Array(Type.String())), remove: Type.Optional(Type.Array(Type.String())) }),
-  "users:update-rules",
+  "user_update_rules",
 );
 
-const authAddPending = atomicTool(
+const authAddPending = tool(
   "auth_add_pending",
   "Add Pending Authorization",
   "Create a pending authorization claim. Admin only.",
-  Type.Object({ requesterUserId: Type.Number(), userId: Type.Number(), accessLevel: Type.Union([Type.Literal("allowed"), Type.Literal("trusted")]), expiresAt: Type.Optional(Type.String()) }),
-  "auth:add-pending",
+  Type.Object({ requesterUserId: Type.Number(), username: Type.String(), createdBy: Type.Number(), accessLevel: Type.Optional(accessLevel), expiresAt: Type.Optional(Type.String()), durationMinutes: Type.Optional(Type.Number()) }),
+  "auth_add_pending",
 );
 
 export default function defectBotTools(pi: any) {
-  pi.registerTool(defectEvents);
-  pi.registerTool(telegramListRecipients);
-  pi.registerTool(telegramSendMessage);
-  pi.registerTool(telegramSendFile);
-  pi.registerTool(usersAddAlias);
-  pi.registerTool(userSetTimezone);
-  pi.registerTool(userSetPersonPath);
-  pi.registerTool(userUpdateRules);
-  pi.registerTool(authAddPending);
+  for (const item of [
+    eventList,
+    eventGet,
+    eventCreate,
+    eventUpdate,
+    eventDelete,
+    eventPause,
+    eventResume,
+    telegramListRecipients,
+    telegramSendMessage,
+    telegramSendFile,
+    userAddAlias,
+    userRecordPerson,
+    userSetTimezone,
+    userSetPersonPath,
+    userUpdateRules,
+    authAddPending,
+  ]) {
+    pi.registerTool(item);
+  }
 }

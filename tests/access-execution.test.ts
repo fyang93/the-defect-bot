@@ -129,7 +129,7 @@ describe("access execution", () => {
               message: "好的，已把 test_rain 设为 trusted。",
               answerMode: "needs-execution",
               usedNativeExecution: true,
-              completedActions: ["users:set-access"],
+              completedActions: ["user:set-access"],
             };
           },
         } as any,
