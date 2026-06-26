@@ -137,6 +137,9 @@ export async function runAssistantTask(deps: RunAssistantTaskDeps): Promise<void
     logger.info(`assistant task ${task.id} completed totalMs=${Date.now() - taskStartedAt} assistantMs=${assistantMs} outputMs=${outputMs}`);
   } catch (error) {
     onStopWaiting(task);
+    if (typeof task.waitingMessageId === "number") {
+      await ctx.api.deleteMessage(task.chatId, task.waitingMessageId).catch(() => {});
+    }
     const message = error instanceof Error ? error.message : String(error);
     await logger.warn(`assistant task ${task.id} failed message=${message}`);
     if (isTaskCurrent(task.scopeKey, task.id) && !task.cancelled) {

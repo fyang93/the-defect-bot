@@ -379,4 +379,56 @@ describe("assistant orchestration", () => {
     expect(calls).toContain("reply:已经处理好了");
   });
 
+  test("failed task deletes waiting message and sets sad reaction", async () => {
+    const config = await createTempConfig();
+    const calls: string[] = [];
+    const reactions: string[] = [];
+    const ctx = {
+      chat: { id: 1, type: "private" },
+      from: { id: 1 },
+      message: { message_id: 10, text: "会失败" },
+      api: {
+        deleteMessage: async (chatId: number, messageId: number) => {
+          calls.push(`delete:${chatId}:${messageId}`);
+        },
+      },
+    } as any;
+    const task: ActiveConversationTask = {
+      id: 1,
+      userId: 1,
+      scopeKey: "user:1",
+      scopeLabel: "user:1",
+      chatId: 1,
+      sourceMessageId: 10,
+      waitingMessageId: 11,
+      cancelled: false,
+    };
+    const agentService = {
+      runAssistantTurn: async () => {
+        throw new Error("boom");
+      },
+    } as any;
+
+    await runAssistantTask({
+      config,
+      ctx,
+      task,
+      promptText: "会失败",
+      uploadedFiles: [],
+      attachments: [],
+      messageTime: "2026-04-06T00:00:00.000Z",
+      agentService,
+      isAdminUserId: () => true,
+      isTrustedUserId: () => true,
+      isTaskCurrent: () => true,
+      onPruneRecentUploads: async () => {},
+      onStopWaiting: () => {},
+      onSetReaction: async (_ctx, emoji) => { reactions.push(emoji); },
+      onReleaseActiveTask: () => {},
+    });
+
+    expect(calls).toContain("delete:1:11");
+    expect(reactions).toEqual(["😢"]);
+  });
+
 });
