@@ -102,7 +102,7 @@ const telegramListRecipients = tool(
   "telegram_list_recipients",
   "List Telegram Recipients",
   "List known Telegram recipients, optionally filtered by name/alias/username/title. If one result, use its recipientId; if multiple, ask the user to choose; if empty, say no recipient was found or add an alias after clarification.",
-  Type.Object({ query: Type.Optional(Type.String({ description: "Optional name, alias, username, or group title filter, e.g. 李博 or 全流程AI." })), kind: recipientKind }),
+  Type.Object({ query: Type.Optional(Type.String({ description: "Optional name, alias, username, or group title filter." })), kind: recipientKind }),
   "telegram_list_recipients",
 );
 
@@ -170,7 +170,42 @@ const authAddPending = tool(
   "auth_add_pending",
 );
 
+const builtInFileTools = new Set(["read", "grep", "find", "ls", "bash", "edit", "write"]);
+
+function textFromMessageContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((part) => part && typeof part === "object" && "text" in part ? String((part as { text?: unknown }).text || "") : "").join("\n");
+}
+
+function currentAccessRole(ctx: any): "admin" | "trusted" | "allowed" | null {
+  const branch = typeof ctx?.sessionManager?.getBranch === "function" ? ctx.sessionManager.getBranch() : [];
+  for (const entry of [...branch].reverse()) {
+    const message = entry?.message;
+    if (message?.role !== "user") continue;
+    const match = textFromMessageContent(message.content).match(/accessRole=(admin|trusted|allowed)/);
+    if (match) return match[1] as "admin" | "trusted" | "allowed";
+  }
+  return null;
+}
+
+function allowedTmpOnlyInput(input: unknown): boolean {
+  const text = JSON.stringify(input || {}).toLowerCase();
+  if (/memory[\\/]|system[\\/](?:users|chats|state|events)\.json|config\.toml|agent[\\/]\.pi[\\/](?:auth|models)\.json/.test(text)) return false;
+  return /(?:^|[\\/])tmp[\\/]/.test(text);
+}
+
+function installAllowedUserFileGuard(pi: any) {
+  pi.on("tool_call", (event: any, ctx: any) => {
+    if (!builtInFileTools.has(event?.toolName)) return;
+    if (currentAccessRole(ctx) !== "allowed") return;
+    if (allowedTmpOnlyInput(event.input)) return;
+    return { block: true, reason: "Allowed users may only use built-in file tools on tmp/ files; memory and repository private state require trusted access." };
+  });
+}
+
 export default function defectBotTools(pi: any) {
+  installAllowedUserFileGuard(pi);
   for (const item of [
     eventList,
     eventGet,

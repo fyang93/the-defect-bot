@@ -17,10 +17,10 @@ Use this skill for repository-local durable knowledge and files:
 
 Use neighboring skills instead when the task is mainly about:
 
-- event or reminder state → `cli-events`
-- durable assistant behavior rules → `cli-rules`
-- access or identity-link state → `cli-access`
-- actual Telegram delivery → `cli-telegram`
+- event or reminder state → event tools
+- durable assistant behavior rules → user tools
+- access or identity-link state → user tools
+- actual Telegram delivery → Telegram tools
 
 ## First action
 

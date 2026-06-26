@@ -20,7 +20,9 @@ This repository is a local-first Telegram bot backed by the Pi SDK. Keep determi
 - Telegram adapters: `src/bot/telegram/**`
 - Agent workspace: `agent/**` (`agent/.pi/**` for Pi config/resources)
 
-See [docs/agent-architecture.md](docs/agent-architecture.md) for the Pi workspace, assistant/composer/maintainer lanes, and tool loading rules. See [docs/principles.md](docs/principles.md) for project-wide engineering principles.
+Docs tracked by this guide:
+
+- [docs/agent-architecture.md](docs/agent-architecture.md): Pi workspace layout, assistant/composer/maintainer lanes, and tool loading rules.
 
 ## Pi workspace rules
 
@@ -33,6 +35,7 @@ See [docs/agent-architecture.md](docs/agent-architecture.md) for the Pi workspac
 ## Coding rules
 
 - Prefer explicit deterministic interfaces over prompt protocols for durable state.
+- Mutate canonical `system/` and `memory/` state through operations or Pi tools, not ad-hoc writes.
 - Keep Telegram runtime concerns separate from repository state changes.
 - Keep user-visible reply publication in runtime code; do not let tools independently duplicate the current-turn reply.
 - Treat `allowed`, `trusted`, and `admin` access boundaries as security boundaries.

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { Module } from "node:module";
 import path from "node:path";
 import {
   createAgentSession,
@@ -7,7 +8,7 @@ import {
   type AuthStorage,
   type ModelRegistry,
   type ResourceLoader,
-  type SessionManager,
+  SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { AppConfig } from "bot/app/types";
@@ -39,7 +40,6 @@ export class PiSessionFactory {
     agentDir: () => string;
     authStorage: AuthStorage;
     modelRegistry: ModelRegistry;
-    sessionManager: SessionManager;
     ensureReady: () => Promise<void>;
     selectedModel: () => any | undefined;
     systemPromptForRole: (role: PiPromptRole) => string;
@@ -66,14 +66,15 @@ export class PiSessionFactory {
       modelRegistry: this.deps.modelRegistry,
       model: selected,
       resourceLoader: loader,
-      sessionManager: this.deps.sessionManager,
+      sessionManager: SessionManager.inMemory(this.deps.cwd()),
       settingsManager,
       noTools: useTools ? undefined : "all",
       tools: options.toolAllowlist,
     });
     if (scopeLabel?.trim()) session.setSessionName(scopeLabel.trim());
     const toolNames = options.toolAllowlist?.join(",") || (useTools ? "default" : "none");
-    await logger.info(`pi sdk session created ms=${Date.now() - startedAt} scope=${JSON.stringify(scopeKey || "global")} title=${JSON.stringify(scopeLabel?.trim() || "")} role=${role} tools=${useTools} toolNames=${JSON.stringify(toolNames)}`);
+    const activeToolSummary = useTools ? this.summarizeActiveTools(session.getActiveToolNames()) : "none";
+    await logger.info(`pi sdk session created ms=${Date.now() - startedAt} scope=${JSON.stringify(scopeKey || "global")} title=${JSON.stringify(scopeLabel?.trim() || "")} role=${role} tools=${useTools} toolNames=${JSON.stringify(toolNames)} activeTools=${JSON.stringify(activeToolSummary)}`);
     return { sessionId: session.sessionId, session };
   }
 
@@ -91,7 +92,9 @@ export class PiSessionFactory {
 
     const promise = (async () => {
       const startedAt = Date.now();
-      const settingsManager = SettingsManager.inMemory({
+      this.ensureBotSourceResolution();
+      const settingsManager = SettingsManager.create(this.deps.cwd(), this.deps.agentDir());
+      settingsManager.applyOverrides({
         compaction: { enabled: false },
         retry: { enabled: true, maxRetries: 2 },
       });
@@ -101,7 +104,6 @@ export class PiSessionFactory {
         settingsManager,
         systemPromptOverride: () => this.deps.systemPromptForRole(role),
         appendSystemPromptOverride: () => [],
-        noExtensions: !useTools,
         noSkills,
         noPromptTemplates: true,
         noContextFiles,
@@ -113,9 +115,13 @@ export class PiSessionFactory {
             },
       });
       await loader.reload();
-      const extensions = loader.getExtensions().extensions.length;
+      const extensionResult = loader.getExtensions();
+      const extensions = extensionResult.extensions.length;
       const skills = loader.getSkills().skills.length;
-      await logger.info(`pi sdk resources loaded ms=${Date.now() - startedAt} role=${role} tools=${useTools} extensions=${extensions} skills=${skills}`);
+      for (const error of extensionResult.errors) {
+        await logger.warn(`pi sdk extension load failed path=${JSON.stringify(error.path)} error=${JSON.stringify(error.error)}`);
+      }
+      await logger.info(`pi sdk resources loaded ms=${Date.now() - startedAt} role=${role} tools=${useTools} extensions=${extensions} extensionErrors=${extensionResult.errors.length} skills=${skills}`);
       return { loader, settingsManager };
     })().catch((error) => {
       this.resourceLoaders.delete(key);
@@ -124,5 +130,22 @@ export class PiSessionFactory {
 
     this.resourceLoaders.set(key, promise);
     return promise;
+  }
+
+  private summarizeActiveTools(names: string[]): string {
+    const builtin = names.filter((name) => ["read", "bash", "edit", "write"].includes(name));
+    const web = names.filter((name) => ["web_search", "fetch_content", "get_search_content"].includes(name));
+    const bot = names.filter((name) => /^(event|telegram|user|auth)_/.test(name));
+    const other = names.length - builtin.length - web.length - bot.length;
+    return `total=${names.length} builtin=${builtin.join(",") || "none"} web=${web.length} bot=${bot.length} other=${other}`;
+  }
+
+  private ensureBotSourceResolution(): void {
+    const srcDir = path.join(this.deps.config.paths.repoRoot, "src");
+    if (!existsSync(srcDir)) return;
+    const paths = (process.env.NODE_PATH || "").split(path.delimiter).filter(Boolean);
+    if (paths.includes(srcDir)) return;
+    process.env.NODE_PATH = [srcDir, ...paths].join(path.delimiter);
+    (Module as unknown as { _initPaths: () => void })._initPaths();
   }
 }

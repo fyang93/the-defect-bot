@@ -6,28 +6,21 @@ This project uses Pi SDK sessions directly.
 
 ```text
 agent/
-  AGENTS.md                 # bot assistant context; injected into bot SDK sessions and just agent
-  .pi/
-    settings.json           # Pi settings and installed packages
-    auth.json               # local credentials; ignored by git
-    models.json             # local/custom model config; ignored by git
-    extensions/
-      defect-bot-tools/     # repository Pi tools backed by direct operations
-    skills/
-      memory/               # durable local memory workflow
-      custom-toolbox/       # narrow project helper workflows
+  AGENTS.md                 # bot assistant context
+  .pi/                      # Pi config dir: settings, credentials, extensions, prompts, global skills
+  .agents/skills/           # project skills auto-discovered when cwd=agent
 ```
 
-Use `just agent` to open an interactive Pi session with `agent/AGENTS.md` injected and sessions stored in `agent/.pi/sessions/`.
+Use `just agent` to open an isolated interactive Pi session. It disables default context discovery and appends `agent/AGENTS.md` so the root development `AGENTS.md` is not loaded.
 
 ## Runtime lanes
 
 | Lane | Code path | Tools | Context files | Purpose |
 |---|---|---:|---:|---|
-| assistant | `AiService.runAssistantTurn` / scoped sessions | yes | yes | User requests, state changes, memory/file/event/Telegram operations |
+| assistant | `AiService.runAssistantTurn` / scoped sessions | yes | `agent/AGENTS.md` only | User requests, state changes, memory/file/event/Telegram operations |
 | composer / writer | `ReplyComposer` via light writer sessions | no | no | Startup greeting, reminder wording, maintenance reports |
-| scheduled content | `generateScheduledTaskContent` | web allowlist only | no | Current-information automation content; may use web tools |
-| maintainer | `runMaintenancePass` | no | no | Short maintenance summaries and repository housekeeping text |
+| scheduled content | `generateScheduledTaskContent` | web allowlist only | no | Current-information automation content |
+| maintainer | `runMaintenancePass` | no | no | Short maintenance summaries and housekeeping text |
 
 The intended direction is to keep **assistant** as the only broad, state-changing agent lane. Composer and maintainer should stay small and avoid loading `agent/AGENTS.md` unless they explicitly need a broader capability.
 
@@ -50,9 +43,11 @@ These tools call direct deterministic operations under `src/bot/operations/**`; 
 
 ## Credentials and model config
 
-Local-only files:
+Local-only files must not be committed:
 
 - `agent/.pi/auth.json`
 - `agent/.pi/models.json`
+- `agent/.pi/sessions/`
+- `agent/.pi/npm/`
 
-They must not be committed. The bot and `just agent` both use `agent/.pi` as the Pi agent directory; `agent/AGENTS.md` is the single bot-assistant context file.
+The bot and `just agent` both use `agent/.pi` as the Pi agent directory; `agent/AGENTS.md` is the single bot-assistant context file.

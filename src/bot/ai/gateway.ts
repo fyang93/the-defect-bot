@@ -2,7 +2,6 @@ import path from "node:path";
 import {
   AuthStorage,
   ModelRegistry,
-  SessionManager,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type { AppConfig, AiAttachment, UploadedFile } from "bot/app/types";
@@ -34,24 +33,6 @@ type AttachmentCapabilityCache = {
 const MODEL_CAPABILITY_CACHE_MS = 60_000;
 const MODEL_REGISTRY_REFRESH_CACHE_MS = 60_000;
 const COMPOSER_WEB_TOOLS = ["web_search", "fetch_content", "get_search_content"];
-const BOT_ASSISTANT_TOOLS = [
-  "event_list",
-  "event_get",
-  "event_create",
-  "event_update",
-  "event_delete",
-  "event_pause",
-  "event_resume",
-  "telegram_list_recipients",
-  "telegram_send_message",
-  "telegram_send_file",
-  "user_add_alias",
-  "user_record_person",
-  "user_set_timezone",
-  "user_set_person_path",
-  "user_update_rules",
-  "auth_add_pending",
-];
 
 function parseModel(model: string | null): { providerID: string; modelID: string } | null {
   if (!model) return null;
@@ -67,7 +48,6 @@ export class AiService {
   private config: AppConfig;
   private readonly authStorage: AuthStorage;
   private readonly modelRegistry: ModelRegistry;
-  private readonly sessionManager: SessionManager;
   private readonly sessions: SessionBroker<AgentSession>;
   private readonly replyComposer: ReplyComposer;
   private readonly structuredReasoner: StructuredReasoner;
@@ -80,9 +60,8 @@ export class AiService {
     this.config = config;
     this.authStorage = AuthStorage.create(path.join(this.piAgentDir(), "auth.json"));
     this.modelRegistry = ModelRegistry.create(this.authStorage, path.join(this.piAgentDir(), "models.json"));
-    this.sessionManager = SessionManager.inMemory(this.assistantWorkspaceDir());
     this.sessions = new SessionBroker(
-      (scopeKey, scopeLabel) => this.createSession(scopeKey, scopeLabel, "assistant", true, { toolAllowlist: BOT_ASSISTANT_TOOLS }),
+      (scopeKey, scopeLabel) => this.createSession(scopeKey, scopeLabel, "assistant", true),
       async (_sessionId) => {},
     );
     this.promptTemplates = new PromptTemplateRenderer(() => this.piAgentDir());
@@ -92,7 +71,6 @@ export class AiService {
       agentDir: () => this.piAgentDir(),
       authStorage: this.authStorage,
       modelRegistry: this.modelRegistry,
-      sessionManager: this.sessionManager,
       ensureReady: () => this.ensureReady(),
       selectedModel: () => this.selectedModel(),
       systemPromptForRole: (role) => this.systemPromptForRole(role),
@@ -145,7 +123,7 @@ export class AiService {
   }
 
   async warmAssistantResources(): Promise<void> {
-    const entry = await this.createSession(undefined, "Warm assistant resources", "assistant", true, { toolAllowlist: BOT_ASSISTANT_TOOLS });
+    const entry = await this.createSession(undefined, "Warm assistant resources", "assistant", true);
     await entry.session.abort().catch(() => {});
     entry.session.dispose();
     await logger.info("pi sdk assistant resources warmed");
@@ -368,14 +346,8 @@ export class AiService {
       }
       await logger.warn(`discarded assistant output attempt=${attempt} reason=no-tools-and-no-displayable-text`);
     }
-    await logger.warn("assistant produced no valid output after retries; returning fallback text");
-    return {
-      message: lastUsedNativeExecution ? "已处理，但没有生成可展示的回复。" : "抱歉，这次没有生成有效回复。请再试一次。",
-      usedNativeExecution: lastUsedNativeExecution,
-      completedActions: lastCompletedActions,
-      files: [],
-      attachments: [],
-    };
+    await logger.warn(`assistant produced no valid output after retries actions=${JSON.stringify(lastCompletedActions)} usedNativeExecution=${lastUsedNativeExecution ? "yes" : "no"}`);
+    throw new Error("Assistant returned no displayable output.");
   }
 
   stop(): void {

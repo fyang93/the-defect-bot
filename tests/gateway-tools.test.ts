@@ -134,16 +134,13 @@ describe("gateway execution history", () => {
     await expect(service.generateStartupGreeting({ requesterUserId: 1 })).rejects.toThrow("writer text generation must not execute tools");
   });
 
-  test("assistant empty output falls back instead of throwing", async () => {
+  test("assistant empty output throws so runtime can react failure", async () => {
     const service = new AiService(createTestConfig()) as any;
     const calls: any[] = [];
     installFakePiSession(service, [{ role: "assistant", content: [] }], calls);
 
-    const result = await service.runAssistantTurn({ userRequestText: "记录一下李博", accessRole: "admin" });
-
+    await expect(service.runAssistantTurn({ userRequestText: "记录一下李博", accessRole: "admin" })).rejects.toThrow("Assistant returned no displayable output");
     expect(calls).toHaveLength(2);
-    expect(result.message).toBe("抱歉，这次没有生成有效回复。请再试一次。");
-    expect(result.usedNativeExecution).toBe(false);
   });
 
   test("assistant records completed actions from Pi SDK tool events", async () => {
