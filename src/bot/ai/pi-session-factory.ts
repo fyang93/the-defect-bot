@@ -43,6 +43,7 @@ export class PiSessionFactory {
     ensureReady: () => Promise<void>;
     selectedModel: () => any | undefined;
     systemPromptForRole: (role: PiPromptRole) => string;
+    appendSystemPromptForRole: (role: PiPromptRole) => string[];
   }) {}
 
   updateConfig(config: AppConfig): void {
@@ -103,7 +104,7 @@ export class PiSessionFactory {
         agentDir: this.deps.agentDir(),
         settingsManager,
         systemPromptOverride: () => this.deps.systemPromptForRole(role),
-        appendSystemPromptOverride: () => [],
+        appendSystemPromptOverride: (base) => [...base, ...this.deps.appendSystemPromptForRole(role)],
         noSkills,
         noPromptTemplates: true,
         noContextFiles,

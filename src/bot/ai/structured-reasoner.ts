@@ -28,7 +28,6 @@ export class StructuredReasoner {
       text,
       uploadedFiles,
       this.config.bot.defaultTimezone,
-      this.config.bot.personaStyle,
       messageTime,
       accessRole,
       assistantContextText,

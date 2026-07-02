@@ -13,13 +13,13 @@ export function buildPersonaStyleLines(personaStyle?: string, options?: { label?
   ];
 }
 
-export function buildProjectSystemPrompt(personaStyle?: string, role: "assistant" | "maintainer" | "writer" = "assistant"): string {
+export function buildProjectSystemPrompt(role: "assistant" | "maintainer" | "writer" = "assistant"): string {
   if (role === "assistant") {
     return [
       "Follow the Defect Bot assistant instructions loaded from AGENTS.md.",
       "Do the work, then return one user-visible reply.",
+      "Fast path: for clear bot actions, use the deterministic bot tool directly; do not inspect source/logs first.",
       "For outbound messages use telegram_list_recipients then telegram_send_message; for explicit remember requests from admin/trusted users use user_record_person.",
-      ...buildPersonaStyleLines(personaStyle),
     ].filter(Boolean).join("\n");
   }
 
@@ -28,7 +28,6 @@ export function buildProjectSystemPrompt(personaStyle?: string, role: "assistant
       "You are a text-only reply writer for a local-first Telegram bot.",
       "Return plain text only.",
       "Do not use tools or change state.",
-      ...buildPersonaStyleLines(personaStyle),
     ].filter(Boolean).join("\n");
   }
 
@@ -39,37 +38,13 @@ export function buildProjectSystemPrompt(personaStyle?: string, role: "assistant
       "Write short user-facing summaries in the bot's default language.",
       "Keep memory concise and do not replace canonical operational state with it.",
       "Never write under system/ except approved deterministic interfaces.",
-      ...buildPersonaStyleLines(personaStyle, { label: "Summary style" }),
     ].filter(Boolean).join("\n");
   }
 
   throw new Error(`Unsupported prompt role: ${String(role)}`);
 }
 
-export function buildAccessConstraintLines(accessRole: RequestAccessRole): string[] {
-  if (accessRole === "admin") {
-    return [
-      "Permission: admin — may read, return, and persist requester-linked recorded personal information when asked."
-    ];
-  }
-
-  if (accessRole === "allowed") {
-    return [
-      "Permission: allowed — temporary file upload/processing is okay in your scoped context, but no user management, auth changes, durable memory writes, outbound delivery, or unrelated private data.",
-      "If higher privilege is needed, say so briefly.",
-    ];
-  }
-
-  if (accessRole === "trusted") {
-    return [
-      "Permission: trusted — may read, return, and persist requester-linked recorded personal information when asked; no access-level or pending-auth changes."
-    ];
-  }
-
-  return [];
-}
-
-export function buildPrompt(text: string, uploadedFiles: UploadedFile[], defaultTimezone: string, personaStyle: string, messageTime?: string, accessRole: RequestAccessRole = "allowed", sharedConversationContextText?: string, requesterTimezone?: string | null): string {
+export function buildPrompt(text: string, uploadedFiles: UploadedFile[], defaultTimezone: string, messageTime?: string, accessRole: RequestAccessRole = "allowed", sharedConversationContextText?: string, requesterTimezone?: string | null): string {
   const userRequest = text.trim() || "Handle the user input.";
   const effectiveTimezone = requesterTimezone?.trim() || defaultTimezone;
   const localMessageTime = formatIsoInTimezoneParts(messageTime, effectiveTimezone);
@@ -78,12 +53,8 @@ export function buildPrompt(text: string, uploadedFiles: UploadedFile[], default
     uploadedFiles.length > 0 ? "Files:" : "",
     ...uploadedFiles.map((file) => `- ${file.savedPath} (${file.mimeType}, ${Math.ceil(file.sizeBytes / 1024)} KB)`),
     sharedConversationContextText || "",
-    localMessageTime ? `Local time: ${localMessageTime.localDateTime} (${localMessageTime.timezone}).` : "",
-    localMessageTime ? `Interpret relative times in ${localMessageTime.timezone}.` : "",
-    ...buildAccessConstraintLines(accessRole),
-    "Send/tell/greet X: telegram_list_recipients -> telegram_send_message; never reply as X.",
-    "Explicit remember/save requests from admin/trusted: use user_record_person; include account/login details if supplied.",
-    ...buildPersonaStyleLines(personaStyle),
+    localMessageTime ? `requesterLocalTime=${localMessageTime.localDateTime} (${localMessageTime.timezone})` : "",
+    `accessRole=${accessRole}`,
     `Request: ${userRequest}`,
   ].filter(Boolean);
 

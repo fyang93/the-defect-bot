@@ -112,6 +112,7 @@ const MEDIA_GROUP_CACHE_TTL_MS = 60 * 60 * 1000;
 const MEDIA_GROUP_CACHE_MAX_GROUPS = 200;
 const STARTUP_COALESCE_MAX_MS = 500;
 const STATUS_EDIT_DEBOUNCE_MS = 1200;
+const STATUS_EDIT_MIN_INTERVAL_MS = 3000;
 const RECENT_CONTEXT_MAX_MS = 10 * 60 * 1000;
 const RECENT_CONTEXT_MAX_ITEMS = 3;
 function isExpectedFileIngressError(message: string): boolean {
@@ -173,9 +174,11 @@ export class ConversationController {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let closed = false;
     let inFlight = false;
+    let lastEditStartedAt = 0;
 
     const schedule = () => {
       if (closed || timer || inFlight) return;
+      const delayMs = Math.max(STATUS_EDIT_DEBOUNCE_MS, STATUS_EDIT_MIN_INTERVAL_MS - (Date.now() - lastEditStartedAt));
       timer = setTimeout(() => {
         timer = undefined;
         if (closed || !statusText) return;
@@ -185,6 +188,7 @@ export class ConversationController {
           inFlight = false;
           if (!closed && statusText !== text) schedule();
         };
+        lastEditStartedAt = Date.now();
         const sendOrEdit = typeof task.waitingMessageId === "number"
           ? this.feedback.editMessageTextFormattedSafe(ctx, task.chatId, task.waitingMessageId, text)
           : this.feedback.sendWaitingMessageSafe(ctx, text).then(async (sent) => {
@@ -198,7 +202,7 @@ export class ConversationController {
         void sendOrEdit.catch(async (error) => {
           await logger.warn(`waiting status update failed chat=${task.chatId} message=${task.waitingMessageId ?? "new"}: ${error instanceof Error ? error.message : String(error)}`);
         }).finally(done);
-      }, STATUS_EDIT_DEBOUNCE_MS);
+      }, delayMs);
     };
 
     return {

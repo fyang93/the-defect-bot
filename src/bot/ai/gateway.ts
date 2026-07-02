@@ -8,7 +8,7 @@ import type { AppConfig, AiAttachment, UploadedFile } from "bot/app/types";
 import { logger } from "bot/app/logger";
 import { formatIsoInTimezoneParts } from "bot/app/time";
 import { state, touchActivity } from "bot/app/state";
-import { buildAccessConstraintLines, buildProjectSystemPrompt, type RequestAccessRole } from "./prompt";
+import { buildPersonaStyleLines, buildProjectSystemPrompt, type RequestAccessRole } from "./prompt";
 import { extractAiTurnResultFromText, isDisplayableUserText } from "./response";
 import type { AiTurnResult, AssistantPlanResult, AssistantProgressHandler, ReminderTextContext } from "./types";
 import { ReplyComposer, type ReplyComposerInputContext } from "./reply-composer";
@@ -41,8 +41,28 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 function toolNameFromEvent(event: Record<string, unknown>): string {
   const direct = event.tool_name ?? event.toolName ?? event.name;
   if (typeof direct === "string") return direct;
-  const tool = asRecord(event.tool);
-  return typeof tool?.name === "string" ? tool.name : "";
+  const tool = asRecord(event.tool) || asRecord(event.toolCall) || asRecord(event.call);
+  const nested = tool?.name ?? tool?.toolName ?? tool?.tool_name;
+  if (typeof nested === "string") return nested;
+  const input = asRecord(event.input) || asRecord(event.args);
+  const inputName = input?.toolName ?? input?.name;
+  return typeof inputName === "string" ? inputName : "";
+}
+
+function isTextGenerationEvent(event: unknown): boolean {
+  const record = asRecord(event);
+  if (record?.type !== "message_update") return false;
+  const delta = asRecord(record.assistantMessageEvent);
+  return delta?.type === "text_delta" || delta?.type === "text_start";
+}
+
+function isToolProgressEvent(event: unknown): boolean {
+  const record = asRecord(event);
+  if (!record) return false;
+  if (typeof record.type === "string" && record.type.startsWith("tool_execution_")) return true;
+  if (record.type !== "message_update") return false;
+  const delta = asRecord(record.assistantMessageEvent);
+  return delta?.type === "toolcall_start" || delta?.type === "toolcall_end";
 }
 
 function toolArgPreview(toolName: string, args: unknown): string {
@@ -135,6 +155,7 @@ export class AiService {
       ensureReady: () => this.ensureReady(),
       selectedModel: () => this.selectedModel(),
       systemPromptForRole: (role) => this.systemPromptForRole(role),
+      appendSystemPromptForRole: (role) => this.appendSystemPromptForRole(role),
     });
     this.replyComposer = new ReplyComposer(
       config,
@@ -292,7 +313,6 @@ export class AiService {
         `Task prompt: ${taskPrompt}`,
       ].join("\n"),
       language: this.config.bot.language,
-      style: this.config.bot.personaStyle?.trim() || "default",
       capabilities: "web: true\nstateMutation: false\ntelegramDelivery: false\nrepoTools: false",
     });
     return this.promptInDisposableComposerWebSession(request);
@@ -306,7 +326,6 @@ export class AiService {
     const rendered = this.renderPromptTemplate("maintainer", {
       context: request.trim(),
       language: this.config.bot.language,
-      style: this.config.bot.personaStyle?.trim() || "default",
     });
     return (await this.promptInTemporaryTextSession(rendered, "maintainer")).trim();
   }
@@ -334,22 +353,22 @@ export class AiService {
     }
     const policyFilteredAttachments: AiAttachment[] = [];
 
-    const prompt = [
-      "Turn context:",
+    const turnContext = [
       `requesterUserId=${input.requesterUserId ?? "unknown"}`,
       `chatId=${input.chatId ?? "unknown"}`,
       `chatType=${input.chatType || "unknown"}`,
       `accessRole=${input.accessRole}`,
       localMessageTime ? `requesterLocalTime=${localMessageTime.localDateTime} (${localMessageTime.timezone})` : "",
-      ...buildAccessConstraintLines(input.accessRole),
-      input.sharedConversationContextText?.trim() ? "Assistant context:" : "",
-      input.sharedConversationContextText?.trim() || "",
-      input.uploadedFiles && input.uploadedFiles.length > 0 ? "Saved files:" : "",
-      ...(input.uploadedFiles || []).map((file) => `- ${file.savedPath} (${file.mimeType}, ${Math.ceil(file.sizeBytes / 1024)} KB)`),
-      input.uploadedFiles && input.uploadedFiles.length > 0 ? "Use repository tools to inspect saved local files when needed. Do not claim the image/file is unsupported just because raw multimodal input is unavailable." : "",
-      "User request:",
-      input.userRequestText.trim(),
     ].filter(Boolean).join("\n");
+    const savedFiles = input.uploadedFiles && input.uploadedFiles.length > 0
+      ? ["Saved files:", ...(input.uploadedFiles || []).map((file) => `- ${file.savedPath} (${file.mimeType}, ${Math.ceil(file.sizeBytes / 1024)} KB)`)].join("\n")
+      : "";
+    const prompt = this.renderPromptTemplate("assistant-turn", {
+      turnContext,
+      assistantContext: input.sharedConversationContextText?.trim() ? `Assistant context:\n${input.sharedConversationContextText.trim()}` : "",
+      savedFiles,
+      userRequest: input.userRequestText.trim(),
+    });
 
     let lastCompletedActions: string[] = [];
     let lastUsedNativeExecution = false;
@@ -365,7 +384,7 @@ export class AiService {
             "",
             "Your previous output was invalid.",
             "Do not write XML, <invoke ...> blocks, or tool-call text.",
-            "Use the needed tools, then return the final user-visible reply for this turn in the configured persona.",
+            "Use the needed tools, then return the final user-visible reply for this turn.",
           ].join("\n");
       const promptAttachments = await this.filterAttachmentsForSelectedModel(policyFilteredAttachments, "assistant turn");
       const response = await this.promptInScopedAssistantSession(attemptPrompt, promptAttachments, input.scopeKey, input.scopeLabel, input.onProgress);
@@ -423,7 +442,13 @@ export class AiService {
   }
 
   private systemPromptForRole(role: PromptRole): string {
-    return buildProjectSystemPrompt(this.config.bot.personaStyle, role);
+    return buildProjectSystemPrompt(role);
+  }
+
+  private appendSystemPromptForRole(role: PromptRole): string[] {
+    const label = role === "maintainer" ? "Summary style" : role === "writer" ? "Reply style" : "Style";
+    const lines = buildPersonaStyleLines(this.config.bot.personaStyle, { label });
+    return lines.length > 0 ? ["## Persona", ...lines] : [];
   }
 
   private async promptInTemporaryTextSession(text: string, role: "maintainer"): Promise<string> {
@@ -523,7 +548,7 @@ export class AiService {
             text,
             "",
             "Your previous output was invalid.",
-            "Return a displayable user-visible reply text for this turn in the configured persona.",
+            "Return a displayable user-visible reply text for this turn.",
           ].join("\n");
 
       let rawText = "";
@@ -598,11 +623,16 @@ export class AiService {
     const beforeCount = session.messages.length;
     const completedActions: string[] = [];
     const chunks: string[] = [];
+    let lastToolProgressAt = 0;
     const unsubscribe = session.subscribe((event) => {
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") chunks.push(event.assistantMessageEvent.delta);
-      if (collectTools && event.type === "tool_execution_end" && !event.isError) completedActions.push(event.toolName);
+      if (collectTools && event.type === "tool_execution_end" && !event.isError) completedActions.push(toolNameFromEvent(event));
       const progress = onProgress ? statusTextFromAgentEvent(event) : null;
       if (progress) {
+        const isToolProgress = isToolProgressEvent(event);
+        if (isToolProgress) lastToolProgressAt = Date.now();
+        // Keep fast tool calls visible long enough for the debounced waiting-message edit.
+        if (isTextGenerationEvent(event) && Date.now() - lastToolProgressAt < 3_000) return;
         void Promise.resolve(onProgress!(progress)).catch((error) => {
           void logger.warn(`assistant progress handler failed: ${error instanceof Error ? error.message : String(error)}`);
         });

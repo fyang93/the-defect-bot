@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { buildProjectSystemPrompt, buildPrompt, buildAccessConstraintLines } from "../src/bot/ai/prompt";
+import { buildProjectSystemPrompt, buildPrompt } from "../src/bot/ai/prompt";
 import { extractAiTurnResultFromText, extractDirectTurnResultFromText, isDisplayableUserText } from "../src/bot/ai/response";
 import { StructuredReasoner } from "../src/bot/ai/structured-reasoner";
 
 describe("assistant prompt stability", () => {
   test("assistant and maintainer prompts stay short", () => {
-    const assistant = buildProjectSystemPrompt("模仿杀戮尖塔里的故障机器人说话。", "assistant");
-    const maintainer = buildProjectSystemPrompt("冷静、简洁、带一点稳定的机械感", "maintainer");
+    const assistant = buildProjectSystemPrompt("assistant");
+    const maintainer = buildProjectSystemPrompt("maintainer");
     expect(assistant.trim().length).toBeGreaterThan(0);
     expect(assistant.length).toBeLessThan(1600);
     expect(maintainer.trim().length).toBeGreaterThan(0);
@@ -18,7 +18,6 @@ describe("assistant prompt stability", () => {
       "帮我查一下提醒",
       [],
       "Asia/Tokyo",
-      "冷静、简洁、带一点稳定的机械感",
       undefined,
       "admin",
       undefined,
@@ -28,20 +27,10 @@ describe("assistant prompt stability", () => {
     expect(prompt.length).toBeLessThan(400);
   });
 
-  test("access constraints are injected only when needed", () => {
-    expect(buildAccessConstraintLines("admin")).toEqual([
-      "Permission: admin — may read, return, and persist requester-linked recorded personal information when asked.",
-    ]);
-
-    const trustedPrompt = buildPrompt("把用户2设为 trusted", [], "Asia/Tokyo", "", undefined, "trusted");
-    expect(trustedPrompt).toContain("Permission: trusted — may read, return, and persist requester-linked recorded personal information when asked; no access-level or pending-auth changes.");
-
-    const adminPrompt = buildPrompt("发一下我的证件图", [], "Asia/Tokyo", "", undefined, "admin");
-    expect(adminPrompt).toContain("Permission: admin — may read, return, and persist requester-linked recorded personal information when asked.");
-
-    const allowedPrompt = buildPrompt("把用户2设为 trusted", [], "Asia/Tokyo", "", undefined, "allowed");
-    expect(allowedPrompt).toContain("Permission: allowed — temporary file upload/processing is okay in your scoped context, but no user management, auth changes, durable memory writes, outbound delivery, or unrelated private data.");
-    expect(allowedPrompt).toContain("If higher privilege is needed, say so briefly.");
+  test("access role is passed as context, not repeated policy prose", () => {
+    const trustedPrompt = buildPrompt("把用户2设为 trusted", [], "Asia/Tokyo", undefined, "trusted");
+    expect(trustedPrompt).toContain("accessRole=trusted");
+    expect(trustedPrompt).not.toContain("Permission:");
   });
 
   test("assistant turn prompt injects requester-local time instead of raw utc", () => {
@@ -49,15 +38,13 @@ describe("assistant prompt stability", () => {
       "帮我查一下提醒",
       [],
       "Asia/Tokyo",
-      "冷静、简洁、带一点稳定的机械感",
       "2026-04-05T16:51:25.000Z",
       "admin",
       undefined,
       "Asia/Tokyo",
     );
 
-    expect(prompt).toContain("Local time: 2026-04-06 01:51:25 (Asia/Tokyo).");
-    expect(prompt).toContain("Interpret relative times in Asia/Tokyo.");
+    expect(prompt).toContain("requesterLocalTime=2026-04-06 01:51:25 (Asia/Tokyo)");
     expect(prompt).not.toContain("Message time: 2026-04-05T16:51:25.000Z");
   });
 

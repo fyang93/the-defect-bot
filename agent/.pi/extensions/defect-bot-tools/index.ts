@@ -6,9 +6,50 @@ import { runToolCommand } from "../../../../src/bot/operations/tools/execute.ts"
 
 const configPath = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../config.toml");
 
+function compactEvent(event: Record<string, any> | undefined) {
+  if (!event) return undefined;
+  return {
+    id: event.id,
+    title: event.title,
+    status: event.status,
+    category: event.category,
+    schedule: event.scheduleSummary || event.schedule,
+    scheduledAtLocal: event.scheduledAtRequesterLocal || event.scheduledAtDisplayLocal,
+    nextOccurrenceLocal: event.currentOccurrence?.scheduledAtRequesterLocal || event.currentOccurrence?.scheduledAtDisplayLocal,
+    reminders: Array.isArray(event.remindersDetailed)
+      ? event.remindersDetailed.map((item: Record<string, any>) => ({ label: item.label, notifyAtLocal: item.notifyAtRequesterLocal || item.notifyAtDisplayLocal }))
+      : event.reminders,
+    targets: event.targets,
+  };
+}
+
+function compactToolResult(value: unknown): unknown {
+  const record = value && typeof value === "object" ? value as Record<string, any> : null;
+  if (!record || record.ok === false) return value;
+
+  if (record.delivered) {
+    const recipient = record.recipientLabel || record.recipientId;
+    return { ok: true, delivered: true, receipt: `已发送给 ${recipient}`, recipientId: record.recipientId, messageId: record.messageId };
+  }
+  if (record.event) {
+    const event = compactEvent(record.event);
+    return { ok: true, changed: record.changed, eventId: record.eventId || record.event.id, receipt: `已处理：${record.event.title}`, event };
+  }
+  if (Array.isArray(record.events)) {
+    return { ok: true, count: record.events.length, events: record.events.map(compactEvent) };
+  }
+  if (record.userId || record.personPath) {
+    return { ok: true, changed: record.changed, userId: record.userId, personPath: record.personPath, accessLevel: record.accessLevel, receipt: record.personPath ? `已记录到 ${record.personPath}` : "用户资料已更新" };
+  }
+  if (Array.isArray(record.recipients)) {
+    return { ok: true, count: record.recipients.length, recipients: record.recipients };
+  }
+  return value;
+}
+
 function toolResult(value: unknown) {
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
+    content: [{ type: "text" as const, text: JSON.stringify(compactToolResult(value), null, 2) }],
     details: value,
   };
 }
@@ -49,7 +90,7 @@ const eventGet = tool(
 const eventCreate = tool(
   "event_create",
   "Create Event",
-  "Create a reminder, event, routine, scheduled Telegram message, or automation.",
+  "Create a reminder, event, routine, scheduled Telegram message, or automation. Clear reminder requests should call this directly and trust the returned receipt/event summary; do not call another tool just to verify creation. For recurring schedules, stored schedule.time is interpreted in the target user's local timezone; convert explicit outside timezones to that local time before calling.",
   Type.Object({
     requesterUserId: Type.Optional(Type.Number()),
     title: Type.String(),
@@ -69,7 +110,7 @@ const eventCreate = tool(
 const eventUpdate = tool(
   "event_update",
   "Update Event",
-  "Update matched events. Prefer exact eventId or explicit ids when available.",
+  "Update matched events. Prefer exact eventId or explicit ids when available. Trust the returned receipt/event summary; do not call another tool just to verify the update.",
   Type.Object({ requesterUserId: Type.Optional(Type.Number()), match: eventMatch, changes: eventChanges }),
   "event_update",
 );
@@ -77,7 +118,7 @@ const eventUpdate = tool(
 const eventDelete = tool(
   "event_delete",
   "Delete Event",
-  "Delete matched events. Prefer exact eventId or explicit ids when available.",
+  "Delete matched events. Prefer exact eventId or explicit ids when available. Trust the returned receipt/event summary; do not call another tool just to verify deletion.",
   Type.Object({ requesterUserId: Type.Optional(Type.Number()), match: eventMatch }),
   "event_delete",
 );
@@ -85,7 +126,7 @@ const eventDelete = tool(
 const eventPause = tool(
   "event_pause",
   "Pause Event",
-  "Pause matched events.",
+  "Pause matched events. Trust the returned receipt/event summary; do not call another tool just to verify pause.",
   Type.Object({ requesterUserId: Type.Optional(Type.Number()), match: eventMatch }),
   "event_pause",
 );
@@ -93,7 +134,7 @@ const eventPause = tool(
 const eventResume = tool(
   "event_resume",
   "Resume Event",
-  "Resume matched events.",
+  "Resume matched events. Trust the returned receipt/event summary; do not call another tool just to verify resume.",
   Type.Object({ requesterUserId: Type.Optional(Type.Number()), match: eventMatch }),
   "event_resume",
 );
@@ -109,7 +150,7 @@ const telegramListRecipients = tool(
 const telegramSendMessage = tool(
   "telegram_send_message",
   "Send Telegram Message",
-  "Send content to a resolved Telegram recipientId. Requires trusted/admin requesterUserId. Never use this to duplicate the current-turn reply back to the current chat.",
+  "Send content to a resolved Telegram recipientId. Requires trusted/admin requesterUserId. Returns a delivery receipt; do not call another tool just to verify delivery. Never use this to duplicate the current-turn reply back to the current chat.",
   Type.Object({ requesterUserId: Type.Number(), recipientId: Type.Number(), recipientLabel: Type.Optional(Type.String()), content: Type.String() }),
   "telegram_send_message",
 );
@@ -133,7 +174,7 @@ const userAddAlias = tool(
 const userRecordPerson = tool(
   "user_record_person",
   "Record User Person Memory",
-  "Create or update a memory/people README for a Telegram user, record durable facts there, and link system/users.json personPath. Use this when an admin/trusted user explicitly asks to remember facts, including account/login details.",
+  "Create or update a memory/people README for a Telegram user, record durable facts there, and link system/users.json personPath. Use this when an admin/trusted user explicitly asks to remember facts, including account/login details. Trust the returned receipt; do not read the file just to verify.",
   Type.Object({ requesterUserId: Type.Number(), userId: Type.Number(), name: Type.Optional(Type.String()), aliases: Type.Optional(Type.Array(Type.String())), facts: Type.Optional(Type.Array(Type.String())), personPath: Type.Optional(Type.String()) }),
   "user_record_person",
 );

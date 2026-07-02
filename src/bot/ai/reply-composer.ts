@@ -3,7 +3,6 @@ import { getUserTimezone } from "bot/app/state";
 import { formatIsoInTimezoneParts } from "bot/app/time";
 import { resolveChat, resolveUser } from "bot/operations/context/store";
 import { extractDisplayableText } from "./response";
-import { buildPersonaStyleLines } from "./prompt";
 import type { ReminderTextContext } from "./types";
 
 export type ReplyComposerInputContext = { requesterUserId?: number; chatId?: number; chatType?: string; preferredLanguage?: string };
@@ -11,7 +10,6 @@ export type ComposerPromptInput = {
   task: string;
   context: string;
   language: string;
-  style: string;
   capabilities: string;
 };
 
@@ -78,21 +76,18 @@ export class ReplyComposer {
     return composed || cleanFacts.join("\n");
   }
 
-  private buildComposerRequest(task: string, lines: string[], options?: { separator?: string; includePersonaStyle?: boolean; preferredLanguage?: string; capabilities?: string }): string {
+  private buildComposerRequest(task: string, lines: string[], options?: { separator?: string; preferredLanguage?: string; capabilities?: string }): string {
     const separator = options?.separator ?? "\n";
-    const includePersonaStyle = options?.includePersonaStyle ?? true;
     const context = [
       ...lines,
       options?.preferredLanguage ? `Use this language for the reply: ${options.preferredLanguage}.` : "",
       "Return plain user-visible text only.",
-      ...(includePersonaStyle ? buildPersonaStyleLines(this.config.bot.personaStyle, { label: "Reply style" }) : []),
     ].filter(Boolean).join(separator);
     if (!this.renderComposerPrompt) return context;
     return this.renderComposerPrompt({
       task,
       context,
       language: options?.preferredLanguage || this.config.bot.language,
-      style: this.config.bot.personaStyle?.trim() || "default",
       capabilities: options?.capabilities || "web: false\nstateMutation: false\ntelegramDelivery: false\nrepoTools: false",
     });
   }

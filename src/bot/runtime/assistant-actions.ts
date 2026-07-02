@@ -43,11 +43,11 @@ function looksLikeExplicitRememberRequest(text: string): boolean {
 }
 
 function outboundRetryPrompt(text: string): string {
-  return `${text}\n\nSystem correction: this is an outbound Telegram delivery request. Use telegram_list_recipients with a query, then telegram_send_message. Do not reply as the recipient in the current chat; if the recipient list is empty or ambiguous, report that result.`;
+  return `${text}\n\nRetry: the previous response missed the required outbound-delivery tool path. Follow AGENTS.md tool routing for this same request.`;
 }
 
 function memoryRetryPrompt(text: string): string {
-  return `${text}\n\nSystem correction: this is an explicit durable memory request from an admin/trusted user. Use user_record_person with requesterUserId and the target Telegram user id. Persist the supplied facts exactly, including account/login details if present, then return one brief confirmation. Do not offer alternatives.`;
+  return `${text}\n\nRetry: the previous response missed the required durable-memory tool path. Follow AGENTS.md tool routing for this same request.`;
 }
 
 export async function executeAssistantActions(input: ExecuteAssistantActionsInput): Promise<AssistantTurnResult> {

@@ -41,7 +41,7 @@ describe("assistant action execution", () => {
     });
 
     expect(prompts).toHaveLength(2);
-    expect(prompts[1]).toContain("explicit durable memory request");
+    expect(prompts[1]).toContain("durable-memory tool path");
     expect(result.completedActions).toEqual(["user_record_person"]);
   });
 
@@ -74,7 +74,7 @@ describe("assistant action execution", () => {
     });
 
     expect(prompts).toHaveLength(2);
-    expect(prompts[1]).toContain("outbound Telegram delivery request");
+    expect(prompts[1]).toContain("outbound-delivery tool path");
     expect(result.completedActions).toEqual(["telegram_send_message"]);
   });
 });

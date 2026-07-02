@@ -9,7 +9,6 @@ Context:
 {{context}}
 
 Language: {{language}}
-Style: {{style}}
 
 Rules:
 - Return a short user-facing maintenance summary.

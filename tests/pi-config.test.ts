@@ -7,7 +7,7 @@ import { loadConfig } from "../src/bot/app/config";
 
 describe("role prompts stay aligned with current routing design", () => {
   test("assistant prompt stays narrow", () => {
-    const assistant = buildProjectSystemPrompt("简洁", "assistant");
+    const assistant = buildProjectSystemPrompt("assistant");
 
     expect(assistant).toContain("Follow the Defect Bot assistant instructions loaded from AGENTS.md.");
     expect(assistant).toContain("Do the work, then return one user-visible reply.");

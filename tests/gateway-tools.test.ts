@@ -22,7 +22,7 @@ function createTestConfig(): AppConfig {
 
 type FakeMessage = { role: string; content?: Array<{ type: string; text?: string; name?: string }> };
 
-function installFakePiSession(service: any, responses: FakeMessage[], calls: any[] = [], toolNames: string[] = []): void {
+function installFakePiSession(service: any, responses: FakeMessage[], calls: any[] = [], toolNames: string[] = [], extraEvents: any[] = []): void {
   service.ensureReady = async () => {};
   service.createSession = async (_scopeKey: string | undefined, scopeLabel: string | undefined, role: string, useTools = role === "assistant", options?: any) => {
     const listeners: Array<(event: any) => void> = [];
@@ -42,6 +42,9 @@ function installFakePiSession(service: any, responses: FakeMessage[], calls: any
         session.messages.push({ role: "user", content: text, timestamp: Date.now() });
         for (const toolName of toolNames) {
           for (const listener of listeners) listener({ type: "tool_execution_end", toolName, isError: false });
+        }
+        for (const event of extraEvents) {
+          for (const listener of listeners) listener(event);
         }
         session.messages.push(...responses);
       },
@@ -154,5 +157,22 @@ describe("gateway execution history", () => {
     expect(result.usedNativeExecution).toBe(true);
     expect(result.completedActions).toEqual(["telegram_send_message", "event_create"]);
     expect(progress).toContain("工具完成：telegram_send_message");
+  });
+
+  test("assistant progress keeps fast custom tool status visible", async () => {
+    const service = new AiService(createTestConfig()) as any;
+    installFakePiSession(
+      service,
+      [{ role: "assistant", content: [{ type: "text", text: "已创建提醒" }] }],
+      [],
+      ["event_create"],
+      [{ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "已" } }],
+    );
+    const entry = await service.createSession(undefined, "test", "assistant", true);
+
+    const progress: string[] = [];
+    await service.promptSessionForAssistant(entry.session, "创建提醒：明天下午3点开会", [], (message: string) => progress.push(message));
+    expect(progress).toContain("工具完成：event_create");
+    expect(progress).not.toContain("正在生成回复…");
   });
 });

@@ -35,7 +35,7 @@ function createTestConfig(): AppConfig {
 }
 
 describe("reply composer sanitization", () => {
-  test("generateReminderText requests persona-aware reminder wording with explicit local time", async () => {
+  test("generateReminderText requests reminder wording with explicit local time", async () => {
     let captured = "";
     const composer = new ReplyComposer(createTestConfig(), async (prompt) => {
       captured = prompt;
@@ -48,8 +48,8 @@ describe("reply composer sanitization", () => {
       specialKind: "birthday",
       category: "special",
     });
-    expect(captured).toContain("Reply style: 冷静、简洁、稳定");
-    expect(captured).toContain("Reply in that style.");
+    expect(captured).not.toContain("Reply style:");
+    expect(captured).not.toContain("Reply in that style.");
     expect(captured).not.toContain("If you mention a time, include the timezone.");
     expect(captured).toContain("Write one short natural reminder message for the recipient.");
     expect(captured).toContain("Scheduled message delivery local time: 2026-04-06 03:00:00 (Asia/Tokyo).");
@@ -59,7 +59,7 @@ describe("reply composer sanitization", () => {
     expect(captured).toContain("Special reminder kind: birthday.");
   });
 
-  test("startup greeting request keeps persona enabled", async () => {
+  test("startup greeting request leaves persona to session context", async () => {
     let captured = "";
     const composer = new ReplyComposer(createTestConfig(), async () => "", async (prompt) => {
       captured = prompt;
@@ -69,8 +69,8 @@ describe("reply composer sanitization", () => {
     expect(captured).toContain("Write one short proactive startup greeting for the administrator.");
     expect(captured).toContain("Return only the greeting text. Do not send it and do not take any action.");
     expect(captured).toContain("Do not mention the current time or date unless the user explicitly asked for it.");
-    expect(captured).toContain("Reply style: 冷静、简洁、稳定");
-    expect(captured).toContain("Reply in that style.");
+    expect(captured).not.toContain("Reply style:");
+    expect(captured).not.toContain("Reply in that style.");
   });
 
   test("generateReminderText rejects tool-call markup and returns empty string", async () => {
