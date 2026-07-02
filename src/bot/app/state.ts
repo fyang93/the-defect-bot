@@ -59,8 +59,7 @@ function hydrateKnownEntities(repoRoot: string): void {
       const username = cleanOptionalText(record.username);
       const displayName = cleanOptionalText(record.displayName) || (username ? `@${username}` : "Telegram user");
       const lastSeenAt = cleanOptionalText(record.lastSeenAt) || new Date().toISOString();
-      const languageCode = cleanOptionalText(record.languageCode) || cleanOptionalText(record.language_code);
-      nextUsers[userId] = { username, displayName, lastSeenAt, languageCode };
+      nextUsers[userId] = { username, displayName, lastSeenAt };
       const timezone = cleanOptionalText(record.timezone);
       if (timezone) nextTimezones[userId] = { timezone, updatedAt: cleanOptionalText(record.updatedAt) || new Date().toISOString() };
     }

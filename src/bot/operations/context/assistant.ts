@@ -66,6 +66,7 @@ export async function buildAssistantContextBlock(config: AppConfig, input: Assis
   const lines = [
     requesterUser?.personPath ? `Requester person path: ${requesterUser.personPath}` : "",
     requesterUser?.personPath ? "For requester-specific recorded facts or files, start from that path before saying nothing is recorded." : "",
+    requesterUser?.personPath ? "For vague alias requests, read that file and copy exact aliases/names/Telegram handles; never infer aliases from slugs, pinyin, usernames, or current display names." : "",
     "Assistant context JSON:",
     "```json",
     JSON.stringify(payload, null, 2),

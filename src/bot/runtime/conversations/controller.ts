@@ -16,7 +16,7 @@ import { runAssistantTask, type ActiveConversationTask } from "bot/runtime";
 import { WAITING_MESSAGE_PLACEHOLDER } from "./constants";
 import { rememberTelegramParticipants } from "bot/telegram/identity";
 import { buildTelegramReplyContextBlock, summarizeIncomingText, telegramReplySummary } from "bot/telegram/reply_context";
-import { saveTelegramFileFromMessage, uploadedFileToAiAttachment } from "bot/telegram/transport";
+import { saveTelegramFile, saveTelegramFileFromMessage, uploadedFileToAiAttachment } from "bot/telegram/transport";
 import { ingestTelegramFile, logFilePromptScheduling } from "bot/telegram/ingress";
 import { ActiveConversationTasks } from "./active";
 import { buildRecentAttachments, pruneRecentUploads } from "bot/telegram/recent";
@@ -72,12 +72,22 @@ function deterministicClockTimeContext(text: string, requesterUserId: number | u
   ].join("\n");
 }
 
-type ConversationTurnInput = {
-  waitingTemplate: string;
+type RecentConversationInput = {
   promptText: string;
   uploadedFiles: UploadedFile[];
   attachments: AiAttachment[];
   messageTime?: string;
+};
+
+type ConversationTurnInput = RecentConversationInput & {
+  waitingTemplate: string;
+};
+
+type BufferedRecentInput = {
+  input: RecentConversationInput;
+  userId: number;
+  messageId: number;
+  at: number;
 };
 
 type ConversationTurnSlot = {
@@ -101,18 +111,15 @@ type MediaGroupCacheEntry = {
 const MEDIA_GROUP_CACHE_TTL_MS = 60 * 60 * 1000;
 const MEDIA_GROUP_CACHE_MAX_GROUPS = 200;
 const STARTUP_COALESCE_MAX_MS = 500;
+const STATUS_EDIT_DEBOUNCE_MS = 1200;
+const RECENT_CONTEXT_MAX_MS = 10 * 60 * 1000;
+const RECENT_CONTEXT_MAX_ITEMS = 3;
 function isExpectedFileIngressError(message: string): boolean {
   return /file is too big|bot download limit|exceeds limit of/i.test(message);
 }
 
 function isTelegramBotApiFileLimitError(message: string): boolean {
   return /file is too big|bot download limit/i.test(message);
-}
-
-function renderWaitingMessage(template: string, waitingMessage: string): string {
-  return template.includes(WAITING_MESSAGE_PLACEHOLDER)
-    ? template.replaceAll(WAITING_MESSAGE_PLACEHOLDER, waitingMessage)
-    : waitingMessage;
 }
 
 function contactPromptText(ctx: Context): string {
@@ -137,6 +144,7 @@ export class ConversationController {
   private readonly feedback;
   private readonly mediaGroups = new Map<string, MediaGroupCacheEntry>();
   private readonly turns = new Map<string, ConversationTurnSlot>();
+  private readonly recentInputs = new Map<string, BufferedRecentInput[]>();
   private readonly waitingTimers = new Map<string, ReturnType<typeof setInterval>>();
 
   constructor(private readonly deps: ConversationControllerDeps) {
@@ -160,27 +168,51 @@ export class ConversationController {
     this.waitingTimers.delete(key);
   }
 
-  private startWaitingRotation(ctx: Context, task: ActiveConversationTask, template: string): void {
-    if (typeof task.waitingMessageId !== "number") return;
-    const messages = this.deps.config.telegram.waitingMessages?.length
-      ? this.deps.config.telegram.waitingMessages
-      : (this.deps.config.telegram.waitingMessage ? [this.deps.config.telegram.waitingMessage] : []);
-    const intervalMs = (this.deps.config.telegram.waitingMessageRotationSeconds ?? 5) * 1000;
-    if (messages.length < 2 || intervalMs <= 0) return;
+  private createWaitingStatusUpdater(ctx: Context, task: ActiveConversationTask): { onProgress: (text: string) => void; stop: () => void } {
+    let statusText = "";
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let closed = false;
+    let inFlight = false;
 
-    let index = 1;
-    const timer = setInterval(() => {
-      if (!this.activeTasks.isCurrent(task.scopeKey, task.id) || task.cancelled) {
-        this.stopWaitingRotation(task);
-        return;
-      }
-      const text = renderWaitingMessage(template, messages[index % messages.length]);
-      index += 1;
-      void this.feedback.editMessageTextFormattedSafe(ctx, task.chatId, task.waitingMessageId!, text).catch(async (error) => {
-        await logger.warn(`waiting message rotation failed chat=${task.chatId} message=${task.waitingMessageId}: ${error instanceof Error ? error.message : String(error)}`);
-      });
-    }, intervalMs);
-    this.waitingTimers.set(this.waitingTimerKey(task), timer);
+    const schedule = () => {
+      if (closed || timer || inFlight) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        if (closed || !statusText) return;
+        const text = statusText;
+        inFlight = true;
+        const done = () => {
+          inFlight = false;
+          if (!closed && statusText !== text) schedule();
+        };
+        const sendOrEdit = typeof task.waitingMessageId === "number"
+          ? this.feedback.editMessageTextFormattedSafe(ctx, task.chatId, task.waitingMessageId, text)
+          : this.feedback.sendWaitingMessageSafe(ctx, text).then(async (sent) => {
+              if (typeof sent?.message_id !== "number") return;
+              if (closed || task.cancelled || !this.activeTasks.isCurrent(task.scopeKey, task.id)) {
+                await ctx.api.deleteMessage(task.chatId, sent.message_id).catch(() => {});
+                return;
+              }
+              task.waitingMessageId = sent.message_id;
+            });
+        void sendOrEdit.catch(async (error) => {
+          await logger.warn(`waiting status update failed chat=${task.chatId} message=${task.waitingMessageId ?? "new"}: ${error instanceof Error ? error.message : String(error)}`);
+        }).finally(done);
+      }, STATUS_EDIT_DEBOUNCE_MS);
+    };
+
+    return {
+      onProgress: (text: string) => {
+        if (!text || closed || text === statusText) return;
+        statusText = text;
+        schedule();
+      },
+      stop: () => {
+        closed = true;
+        if (timer) clearTimeout(timer);
+        timer = undefined;
+      },
+    };
   }
 
   hasActiveTask(): boolean {
@@ -200,6 +232,56 @@ export class ConversationController {
     }
     if (typeof userId === "number") return { key: `user:${userId}`, label: `user ${userId}` };
     return { key: "global", label: "global" };
+  }
+
+  private isGroupChat(ctx: Context): boolean {
+    return ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+  }
+
+  private pruneRecentInputs(scopeKey: string, now = Date.now()): BufferedRecentInput[] {
+    const kept = (this.recentInputs.get(scopeKey) || [])
+      .filter((item) => now - item.at <= RECENT_CONTEXT_MAX_MS)
+      .slice(-RECENT_CONTEXT_MAX_ITEMS);
+    if (kept.length) this.recentInputs.set(scopeKey, kept);
+    else this.recentInputs.delete(scopeKey);
+    return kept;
+  }
+
+  private stashRecentInput(ctx: Context, scope: { key: string }, input: RecentConversationInput): void {
+    const userId = ctx.from?.id;
+    const messageId = ctx.message?.message_id;
+    if (!this.isGroupChat(ctx) || typeof userId !== "number" || typeof messageId !== "number") return;
+    this.recentInputs.set(scope.key, [...this.pruneRecentInputs(scope.key), { input, userId, messageId, at: Date.now() }].slice(-RECENT_CONTEXT_MAX_ITEMS));
+  }
+
+  private recentFor(ctx: Context, scope: { key: string }): BufferedRecentInput[] {
+    const userId = ctx.from?.id;
+    const messageId = ctx.message?.message_id;
+    if (!this.isGroupChat(ctx) || typeof userId !== "number") return [];
+    return this.pruneRecentInputs(scope.key).filter((item) => item.userId === userId && item.messageId !== messageId);
+  }
+
+  private forgetRecentInputs(scopeKey: string, used: BufferedRecentInput[]): void {
+    if (used.length === 0) return;
+    const usedIds = new Set(used.map((item) => item.messageId));
+    const kept = this.pruneRecentInputs(scopeKey).filter((item) => !usedIds.has(item.messageId));
+    if (kept.length) this.recentInputs.set(scopeKey, kept);
+    else this.recentInputs.delete(scopeKey);
+  }
+
+  private mergeRecentInput(left: RecentConversationInput, right: RecentConversationInput): RecentConversationInput {
+    return {
+      promptText: this.mergePromptText(left.promptText, right.promptText),
+      uploadedFiles: [...left.uploadedFiles, ...right.uploadedFiles],
+      attachments: [...left.attachments, ...right.attachments],
+      messageTime: right.messageTime || left.messageTime,
+    };
+  }
+
+  private inputWithRecent(ctx: Context, scope: { key: string }, input: RecentConversationInput): { input: RecentConversationInput; recent: BufferedRecentInput[] } {
+    const recent = this.recentFor(ctx, scope);
+    const prior = recent.reduce<RecentConversationInput | null>((merged, item) => merged ? this.mergeRecentInput(merged, item.input) : item.input, null);
+    return { input: prior ? this.mergeRecentInput(prior, input) : input, recent };
   }
 
   async interruptActiveTask(reason: string, scopeKey?: string, options?: { reactionEmoji?: string | null }): Promise<void> {
@@ -222,11 +304,19 @@ export class ConversationController {
       const incomingAt = Date.now();
       const text = ctx.message && "text" in ctx.message ? ctx.message.text?.trim() || "" : "";
       if (!text || text.startsWith("/")) return;
-      if (!this.deps.isAddressedToBot(ctx)) return;
+      const scope = this.conversationScope(ctx);
+      if (!this.deps.isAddressedToBot(ctx)) {
+        this.stashRecentInput(ctx, scope, {
+          promptText: ["Recent group message from the same requester (cached; not addressed to the bot):", text].join("\n"),
+          uploadedFiles: [],
+          attachments: [],
+          messageTime: await this.messageReferenceTime(ctx),
+        });
+        return;
+      }
 
       touchActivity();
       rememberTelegramParticipants(this.deps.config, ctx);
-      const scope = this.conversationScope(ctx);
       const { files: validRecentUploads, attachments } = await buildRecentAttachments(scope.key);
       const replyContext = await this.repliedMessageContext(ctx);
       const allUploadedFiles = [...validRecentUploads, ...replyContext.uploadedFiles];
@@ -251,14 +341,19 @@ export class ConversationController {
           : "",
       ].filter(Boolean).join("\n");
       await logger.info(`received text message chat=${ctx.chat?.id ?? "unknown"} chatType=${ctx.chat?.type ?? "unknown"} user=${ctx.from?.id ?? "unknown"} message=${ctx.message?.message_id ?? "unknown"} text=${JSON.stringify(summarizeIncomingText(text))}${telegramReplySummary(ctx)} replyContextIncluded=${replyContext.text ? "yes" : "no"} replyFiles=${replyContext.uploadedFiles.length}`);
-      const restarted = await this.restartActiveConversationIfMergeable(ctx, scope, {
+      const prepared = this.inputWithRecent(ctx, scope, {
         promptText: effectiveText,
         uploadedFiles: allUploadedFiles,
         attachments: allAttachments,
         messageTime,
-      }, incomingAt);
-      if (restarted) return;
-      this.startConversationTask(ctx, WAITING_MESSAGE_PLACEHOLDER, effectiveText, allUploadedFiles, allAttachments, messageTime);
+      });
+      const restarted = await this.restartActiveConversationIfMergeable(ctx, scope, prepared.input, incomingAt);
+      if (restarted) {
+        this.forgetRecentInputs(scope.key, prepared.recent);
+        return;
+      }
+      this.forgetRecentInputs(scope.key, prepared.recent);
+      this.startConversationTask(ctx, WAITING_MESSAGE_PLACEHOLDER, prepared.input.promptText, prepared.input.uploadedFiles, prepared.input.attachments, prepared.input.messageTime);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await logger.error(`text handling failed: ${message}`);
@@ -288,16 +383,35 @@ export class ConversationController {
   async handleIncomingFile(ctx: Context): Promise<void> {
     const incomingAt = Date.now();
     const caption = ctx.message && "caption" in ctx.message ? ctx.message.caption?.trim() || "" : "";
-    if (this.deps.isAddressedToBot && !this.deps.isAddressedToBot(ctx) && ctx.chat && (ctx.chat.type === "group" || ctx.chat.type === "supergroup")) return;
+    const scope = this.conversationScope(ctx);
+    const addressed = !(this.deps.isAddressedToBot && !this.deps.isAddressedToBot(ctx) && this.isGroupChat(ctx));
 
     const accessLevel = accessLevelForUserId(this.deps.config, ctx.from?.id);
     if (!canUseFiles(accessLevel)) {
       await logger.warn(`file upload rejected level=${accessLevel} user=${ctx.from?.id ?? "unknown"}`);
-      await this.setReactionSafe(ctx, "😢");
+      if (addressed) await this.setReactionSafe(ctx, "😢");
       return;
     }
 
-    const scope = this.conversationScope(ctx);
+    if (!addressed) {
+      try {
+        const uploaded = await saveTelegramFile(ctx, this.deps.config);
+        if (!uploaded) return;
+        const attachment = await uploadedFileToAiAttachment(uploaded);
+        this.rememberMediaGroupFile(ctx, uploaded, attachment);
+        this.stashRecentInput(ctx, scope, {
+          promptText: caption || "The user uploaded an attachment.",
+          uploadedFiles: [uploaded],
+          attachments: [attachment],
+          messageTime: await this.messageReferenceTime(ctx),
+        });
+        await logger.info(`cached unaddressed group file ${uploaded.savedPath} chat=${ctx.chat?.id ?? "unknown"} user=${ctx.from?.id ?? "unknown"} message=${ctx.message?.message_id ?? "unknown"}`);
+      } catch (error) {
+        await logger.warn(`unaddressed group file cache failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return;
+    }
+
     try {
       const saved = await ingestTelegramFile(ctx, this.deps.config, scope.key);
       if (!saved) return;
@@ -321,14 +435,19 @@ export class ConversationController {
 
       await logFilePromptScheduling(ctx, uploaded, caption);
       clearRecentUploads(scope.key);
-      const restarted = await this.restartActiveConversationIfMergeable(ctx, scope, {
+      const prepared = this.inputWithRecent(ctx, scope, {
         promptText: caption,
         uploadedFiles: [uploaded],
         attachments: [attachment],
         messageTime,
-      }, incomingAt);
-      if (restarted) return;
-      this.startConversationTask(ctx, waitingTemplate, caption, [uploaded], [attachment], messageTime);
+      });
+      const restarted = await this.restartActiveConversationIfMergeable(ctx, scope, prepared.input, incomingAt);
+      if (restarted) {
+        this.forgetRecentInputs(scope.key, prepared.recent);
+        return;
+      }
+      this.forgetRecentInputs(scope.key, prepared.recent);
+      this.startConversationTask(ctx, waitingTemplate, prepared.input.promptText, prepared.input.uploadedFiles, prepared.input.attachments, prepared.input.messageTime);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (isExpectedFileIngressError(message)) {
@@ -348,6 +467,7 @@ export class ConversationController {
     await this.interruptActiveTask("/new command", scope.key);
     const sessionId = await this.deps.agentService.newSession(scope.key, scope.label);
     clearRecentUploads(scope.key);
+    this.recentInputs.delete(scope.key);
     return sessionId;
   }
 
@@ -601,18 +721,9 @@ export class ConversationController {
     }
 
     await this.setReactionSafe(ctx, "🤔");
-    const waitingMessages = this.deps.config.telegram.waitingMessages?.length ? this.deps.config.telegram.waitingMessages : (this.deps.config.telegram.waitingMessage ? [this.deps.config.telegram.waitingMessage] : []);
-    const waiting = waitingMessages[0]
-      ? await this.feedback.sendWaitingMessageSafe(ctx, renderWaitingMessage(slot.input.waitingTemplate, waitingMessages[0]))
-      : null;
 
     const latest = this.turns.get(scopeKey);
-    if (!latest || latest.taskId !== taskId || latest.phase !== "collecting") {
-      if (typeof waiting?.message_id === "number") {
-        await ctx.api.deleteMessage(chatId, waiting.message_id).catch(() => {});
-      }
-      return;
-    }
+    if (!latest || latest.taskId !== taskId || latest.phase !== "collecting") return;
 
     const task: ActiveConversationTask = {
       id: taskId,
@@ -621,10 +732,9 @@ export class ConversationController {
       scopeLabel: latest.scopeLabel,
       chatId,
       sourceMessageId,
-      waitingMessageId: waiting?.message_id,
       cancelled: false,
     };
-    this.startWaitingRotation(ctx, task, latest.input.waitingTemplate);
+    const status = this.createWaitingStatusUpdater(ctx, task);
     this.activeTasks.set(scopeKey, task);
     this.turns.set(scopeKey, {
       ...latest,
@@ -644,14 +754,19 @@ export class ConversationController {
         agentService: this.deps.agentService,
         isTaskCurrent: (taskScopeKey, currentTaskId) => this.activeTasks.isCurrent(taskScopeKey, currentTaskId),
         onPruneRecentUploads: (taskScopeKey) => pruneRecentUploads(taskScopeKey),
-        onStopWaiting: (waitingTask) => this.stopWaitingRotation(waitingTask),
+        onStopWaiting: (waitingTask) => {
+          status.stop();
+          this.stopWaitingRotation(waitingTask);
+        },
         onSetReaction: (reactionCtx, emoji) => this.setReactionSafe(reactionCtx, emoji),
+        onProgress: status.onProgress,
         onReleaseActiveTask: (taskScopeKey, currentTaskId) => {
           this.activeTasks.deleteIfCurrent(taskScopeKey, currentTaskId);
           this.clearTurnIfCurrent(taskScopeKey, currentTaskId);
         },
       });
     } finally {
+      status.stop();
       this.stopWaitingRotation(task);
       this.activeTasks.deleteIfCurrent(scopeKey, task.id);
       this.clearTurnIfCurrent(scopeKey, task.id);

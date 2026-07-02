@@ -23,10 +23,7 @@ export class CosmeticTelegramFeedback {
   async setReactionByMessageSafe(chatId: number, messageId: number, emoji: string): Promise<void> {
     if (this.unavailableUntil > Date.now()) return;
     const api = this.bot.api as ReactionCapableApi;
-    if (!api.setMessageReaction) {
-      await logger.warn(`reaction unsupported chat=${chatId} message=${messageId} emoji=${emoji}`);
-      return;
-    }
+    if (!api.setMessageReaction) return;
     try {
       await sendTelegramWithRetry(
         () => api.setMessageReaction!(chatId, messageId, [{ type: "emoji", emoji }], false),

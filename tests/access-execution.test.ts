@@ -152,14 +152,14 @@ describe("access execution", () => {
     }
   });
 
-  test("rememberTelegramUser writes default timezone and language code when recording a new user", async () => {
+  test("rememberTelegramUser keeps Telegram language code runtime-only", async () => {
     const { config, repoRoot, originalCwd } = await createTempConfig();
     try {
       rememberTelegramUser({ id: 9182637451, username: "test_rain_new", first_name: "测试", last_name: "雨", language_code: "en-US" });
       const usersDoc = JSON.parse(await readFile(path.join(repoRoot, "system", "users.json"), "utf8")) as { users?: Record<string, Record<string, unknown>> };
       expect(usersDoc.users?.["9182637451"]?.username).toBe("test_rain_new");
       expect(usersDoc.users?.["9182637451"]?.timezone).toBe("Asia/Tokyo");
-      expect(usersDoc.users?.["9182637451"]?.languageCode).toBe("en-US");
+      expect(usersDoc.users?.["9182637451"]?.languageCode).toBeUndefined();
       expect(userLocale(config, 9182637451)).toBe("en");
       expect(tForUser(config, 9182637451, "command_help")).toBe("Get help");
     } finally {

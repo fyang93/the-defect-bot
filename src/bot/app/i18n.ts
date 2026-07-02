@@ -1,4 +1,3 @@
-import { resolveUser } from "bot/operations/context/store";
 import { state } from "./state";
 import type { AppConfig } from "./types";
 
@@ -67,10 +66,8 @@ export function localeFromTelegramLanguageCode(languageCode: string | undefined,
 
 export function userLocale(config: AppConfig, userId: number | undefined): Locale {
   if (!userId) return config.bot.language;
-  const key = String(userId);
-  const canonicalLanguageCode = resolveUser(config.paths.repoRoot, userId)?.languageCode;
-  const runtimeLanguageCode = state.telegramUserCache[key]?.languageCode;
-  return localeFromTelegramLanguageCode(canonicalLanguageCode || runtimeLanguageCode, config.bot.language);
+  const runtimeLanguageCode = state.telegramUserCache[String(userId)]?.languageCode;
+  return localeFromTelegramLanguageCode(runtimeLanguageCode, config.bot.language);
 }
 
 export function tForUser(config: AppConfig, userId: number | undefined, key: string, values: Record<string, string | number> = {}): string {

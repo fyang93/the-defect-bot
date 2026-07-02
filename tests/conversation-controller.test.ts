@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { Context } from "grammy";
 import type { AppConfig, AiAttachment, UploadedFile } from "../src/bot/app/types";
 import { ConversationController } from "../src/bot/runtime/conversations/controller";
@@ -86,6 +89,79 @@ function createAttachment(name: string): AiAttachment {
 }
 
 describe("conversation controller input merge window", () => {
+  test("uses cached group messages from the same requester when the bot is addressed", async () => {
+    const controller = new ConversationController({
+      config: createConfig(),
+      bot: { api: { deleteMessage: async () => {} } } as any,
+      agentService: { runAssistantTurn: async () => ({ message: "", files: [], attachments: [], completedActions: [], usedNativeExecution: true }) } as any,
+      isAddressedToBot: (ctx: Context) => Boolean(ctx.message && "text" in ctx.message && ctx.message.text?.includes("@bot")),
+    }) as any;
+    const starts: Array<{ promptText: string }> = [];
+    controller.startConversationTask = (_ctx: Context, _waitingTemplate: string, promptText: string) => {
+      starts.push({ promptText });
+    };
+    const groupCtx = (messageId: number, text: string, userId = 1): Context => ({
+      chat: { id: 99, type: "group", title: "g" },
+      from: { id: userId },
+      message: { message_id: messageId, date: 1, text },
+    }) as any;
+
+    await controller.handleIncomingText(groupCtx(1, "上文：这只股票怎么看"));
+    await controller.handleIncomingText(groupCtx(2, "@bot 总结一下"));
+
+    expect(starts).toHaveLength(1);
+    expect(starts[0]?.promptText).toContain("上文：这只股票怎么看");
+    expect(starts[0]?.promptText).toContain("@bot 总结一下");
+  });
+
+  test("uses cached group files from the same requester when the bot is addressed", async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "defect-bot-controller-"));
+    const config = createConfig();
+    config.paths = {
+      ...config.paths,
+      repoRoot: temp,
+      tmpDir: path.join(temp, "tmp"),
+      logFile: path.join(temp, "logs", "bot.log"),
+      stateFile: path.join(temp, "system", "state.json"),
+    };
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(new Uint8Array([1, 2, 3]))) as typeof fetch;
+    try {
+      const controller = new ConversationController({
+        config,
+        bot: { api: { deleteMessage: async () => {} } } as any,
+        agentService: { runAssistantTurn: async () => ({ message: "", files: [], attachments: [], completedActions: [], usedNativeExecution: true }) } as any,
+        isAddressedToBot: (ctx: Context) => Boolean(ctx.message && "text" in ctx.message && ctx.message.text?.includes("@bot")),
+      }) as any;
+      const starts: Array<{ promptText: string; uploadedFiles: UploadedFile[]; attachments: AiAttachment[] }> = [];
+      controller.startConversationTask = (_ctx: Context, _waitingTemplate: string, promptText: string, uploadedFiles: UploadedFile[], attachments: AiAttachment[]) => {
+        starts.push({ promptText, uploadedFiles, attachments });
+      };
+      const fileCtx = {
+        chat: { id: 99, type: "group", title: "g" },
+        from: { id: 1 },
+        message: { message_id: 1, date: 1, caption: "看这个文件", document: { file_id: "file-id", file_name: "a.txt", mime_type: "text/plain" } },
+        api: { getFile: async () => ({ file_path: "a.txt" }) },
+      } as any;
+      const textCtx = {
+        chat: { id: 99, type: "group", title: "g" },
+        from: { id: 1 },
+        message: { message_id: 2, date: 2, text: "@bot 总结文件" },
+      } as any;
+
+      await controller.handleIncomingFile(fileCtx);
+      await controller.handleIncomingText(textCtx);
+
+      expect(starts).toHaveLength(1);
+      expect(starts[0]?.promptText).toContain("看这个文件");
+      expect(starts[0]?.uploadedFiles).toHaveLength(1);
+      expect(starts[0]?.attachments).toHaveLength(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
   test("merges follow-up text into the active in-flight turn", async () => {
     const controller = createController() as any;
     const starts: Array<{ promptText: string; uploadedFiles: UploadedFile[]; attachments: AiAttachment[]; messageTime?: string }> = [];

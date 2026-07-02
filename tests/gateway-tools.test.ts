@@ -149,8 +149,10 @@ describe("gateway execution history", () => {
     installFakePiSession(service, [{ role: "assistant", content: [{ type: "text", text: "已创建提醒" }] }], calls, ["telegram_send_message", "event_create"]);
     const entry = await service.createSession(undefined, "test", "assistant", true);
 
-    const result = await service.promptSessionForAssistant(entry.session, "创建提醒：明天下午3点开会", []);
+    const progress: string[] = [];
+    const result = await service.promptSessionForAssistant(entry.session, "创建提醒：明天下午3点开会", [], (message: string) => progress.push(message));
     expect(result.usedNativeExecution).toBe(true);
     expect(result.completedActions).toEqual(["telegram_send_message", "event_create"]);
+    expect(progress).toContain("工具完成：telegram_send_message");
   });
 });

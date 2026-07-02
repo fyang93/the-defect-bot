@@ -34,6 +34,68 @@ const MODEL_CAPABILITY_CACHE_MS = 60_000;
 const MODEL_REGISTRY_REFRESH_CACHE_MS = 60_000;
 const COMPOSER_WEB_TOOLS = ["web_search", "fetch_content", "get_search_content"];
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+}
+
+function toolNameFromEvent(event: Record<string, unknown>): string {
+  const direct = event.tool_name ?? event.toolName ?? event.name;
+  if (typeof direct === "string") return direct;
+  const tool = asRecord(event.tool);
+  return typeof tool?.name === "string" ? tool.name : "";
+}
+
+function toolArgPreview(toolName: string, args: unknown): string {
+  const record = asRecord(args);
+  if (!record) return "";
+  const value = toolName === "bash" ? record.command
+    : toolName === "read" || toolName === "write" || toolName === "edit" || toolName === "find" || toolName === "ls" ? record.path
+      : toolName === "grep" ? record.pattern
+        : Object.values(record).find((item) => typeof item === "string");
+  return typeof value === "string" ? value.slice(0, 80) : "";
+}
+
+function skillNameFromReadArgs(args: unknown): string | null {
+  const filePath = asRecord(args)?.path;
+  if (typeof filePath !== "string" || !filePath.endsWith("SKILL.md")) return null;
+  return path.basename(path.dirname(filePath));
+}
+
+function statusTextFromAgentEvent(event: unknown): string | null {
+  const record = asRecord(event);
+  if (!record) return null;
+  switch (record.type) {
+    case "agent_start": return "开始处理…";
+    case "turn_start": return "思考中…";
+    case "compaction_start": return "正在整理上下文…";
+    case "auto_retry_start": {
+      const delayMs = typeof record.delayMs === "number" ? record.delayMs : 0;
+      return `请求失败，${Math.ceil(delayMs / 1000)} 秒后重试…`;
+    }
+    case "message_update": {
+      const delta = asRecord(record.assistantMessageEvent);
+      if (delta?.type === "thinking_delta" || delta?.type === "thinking_start") return "思考中…";
+      if (delta?.type === "toolcall_start") return "准备调用工具…";
+      if (delta?.type === "toolcall_end") {
+        const toolCall = asRecord(delta.toolCall);
+        return `准备调用工具：${typeof toolCall?.name === "string" ? toolCall.name : ""}`.trim();
+      }
+      if (delta?.type === "text_delta" || delta?.type === "text_start") return "正在生成回复…";
+      return null;
+    }
+    case "tool_execution_start": {
+      const tool = toolNameFromEvent(record);
+      const skill = tool === "read" ? skillNameFromReadArgs(record.args) : null;
+      const preview = toolArgPreview(tool, record.args);
+      if (skill) return `正在加载 skill：${skill}`;
+      return `正在调用工具：${tool}${preview ? ` ${preview}` : ""}`;
+    }
+    case "tool_execution_update": return `工具运行中：${toolNameFromEvent(record)}`;
+    case "tool_execution_end": return `${record.isError ? "工具失败" : "工具完成"}：${toolNameFromEvent(record)}`;
+    default: return null;
+  }
+}
+
 function parseModel(model: string | null): { providerID: string; modelID: string } | null {
   if (!model) return null;
   const index = model.indexOf("/");
@@ -62,12 +124,11 @@ export class AiService {
     this.modelRegistry = ModelRegistry.create(this.authStorage, path.join(this.piAgentDir(), "models.json"));
     this.sessions = new SessionBroker(
       (scopeKey, scopeLabel) => this.createSession(scopeKey, scopeLabel, "assistant", true),
-      async (_sessionId) => {},
     );
     this.promptTemplates = new PromptTemplateRenderer(() => this.piAgentDir());
     this.sessionFactory = new PiSessionFactory({
       config,
-      cwd: () => this.assistantWorkspaceDir(),
+      cwd: () => this.agentWorkspaceDir(),
       agentDir: () => this.piAgentDir(),
       authStorage: this.authStorage,
       modelRegistry: this.modelRegistry,
@@ -86,10 +147,6 @@ export class AiService {
 
   private agentWorkspaceDir(): string {
     return path.join(this.config.paths.repoRoot, "agent");
-  }
-
-  private assistantWorkspaceDir(): string {
-    return this.agentWorkspaceDir();
   }
 
   private piAgentDir(): string {
@@ -369,11 +426,11 @@ export class AiService {
     return buildProjectSystemPrompt(this.config.bot.personaStyle, role);
   }
 
-  private async promptInTemporaryTextSession(text: string, role: "assistant" | "maintainer"): Promise<string> {
+  private async promptInTemporaryTextSession(text: string, role: "maintainer"): Promise<string> {
     return this.promptInDisposableTextSession({
-      title: role === "maintainer" ? "Maintainer" : "Assistant",
+      title: "Maintainer",
       role,
-      useTools: role === "assistant",
+      useTools: false,
       requestLog: `pi sdk ${role} text prompt request`,
       rawLogLabel: `pi sdk ${role} text prompt`,
       execute: (session) => this.promptSessionForText(session, text, [], role),
@@ -491,10 +548,7 @@ export class AiService {
     throw new Error("Model returned no displayable user reply.");
   }
 
-  private async promptSessionForText(session: AgentSession, text: string, attachments: AiAttachment[], role: "assistant" | "maintainer"): Promise<string> {
-    if (role === "assistant") {
-      return (await this.promptSessionForAssistant(session, text, attachments)).rawText;
-    }
+  private async promptSessionForText(session: AgentSession, text: string, attachments: AiAttachment[], role: "maintainer"): Promise<string> {
     const promptAttachments = await this.filterAttachmentsForSelectedModel(attachments, `${role} text prompt`);
     const startedAt = Date.now();
     await logger.info(`pi sdk text prompt start sessionId=${session.sessionId} model=${JSON.stringify(state.model || "default")} textChars=${text.length} attachments=${promptAttachments.length} mode=full role=${role}`);
@@ -505,15 +559,15 @@ export class AiService {
     return rawText;
   }
 
-  async promptSessionForAssistant(session: AgentSession, text: string, attachments: AiAttachment[], _onProgress?: AssistantProgressHandler): Promise<{ rawText: string; usedNativeExecution: boolean; completedActions: string[] }> {
-    return this.promptSessionForAgent(session, text, attachments, "assistant");
+  async promptSessionForAssistant(session: AgentSession, text: string, attachments: AiAttachment[], onProgress?: AssistantProgressHandler): Promise<{ rawText: string; usedNativeExecution: boolean; completedActions: string[] }> {
+    return this.promptSessionForAgent(session, text, attachments, "assistant", onProgress);
   }
 
-  private async promptSessionForAgent(session: AgentSession, text: string, attachments: AiAttachment[], role: "assistant"): Promise<{ rawText: string; usedNativeExecution: boolean; completedActions: string[] }> {
+  private async promptSessionForAgent(session: AgentSession, text: string, attachments: AiAttachment[], role: "assistant", onProgress?: AssistantProgressHandler): Promise<{ rawText: string; usedNativeExecution: boolean; completedActions: string[] }> {
     const promptAttachments = await this.filterAttachmentsForSelectedModel(attachments, `${role} agent prompt`);
     const startedAt = Date.now();
     await logger.info(`pi sdk text prompt start sessionId=${session.sessionId} model=${JSON.stringify(state.model || "default")} textChars=${text.length} attachments=${promptAttachments.length} mode=full role=${role}`);
-    const result = await this.runPiPrompt(session, text, promptAttachments, true);
+    const result = await this.runPiPrompt(session, text, promptAttachments, true, onProgress);
     const rawText = result.rawText.trim();
     const completedActions = result.completedActions;
     const executionParts = summarizeToolResults(result.newMessages);
@@ -540,13 +594,19 @@ export class AiService {
     return rawText;
   }
 
-  private async runPiPrompt(session: AgentSession, text: string, attachments: AiAttachment[], collectTools: boolean): Promise<{ rawText: string; completedActions: string[]; newMessages: unknown[] }> {
+  private async runPiPrompt(session: AgentSession, text: string, attachments: AiAttachment[], collectTools: boolean, onProgress?: AssistantProgressHandler): Promise<{ rawText: string; completedActions: string[]; newMessages: unknown[] }> {
     const beforeCount = session.messages.length;
     const completedActions: string[] = [];
     const chunks: string[] = [];
     const unsubscribe = session.subscribe((event) => {
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") chunks.push(event.assistantMessageEvent.delta);
       if (collectTools && event.type === "tool_execution_end" && !event.isError) completedActions.push(event.toolName);
+      const progress = onProgress ? statusTextFromAgentEvent(event) : null;
+      if (progress) {
+        void Promise.resolve(onProgress!(progress)).catch((error) => {
+          void logger.warn(`assistant progress handler failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
     });
     try {
       await session.prompt(text, { images: this.buildImages(attachments), expandPromptTemplates: false, source: "api" as any });

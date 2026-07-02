@@ -8,7 +8,6 @@ export class SessionBroker<TSession extends { abort: () => Promise<unknown>; dis
 
   constructor(
     private readonly create: (scopeKey?: string, scopeLabel?: string) => Promise<SessionBrokerEntry<TSession>>,
-    private readonly abort: (sessionId: string) => Promise<void>,
   ) {}
 
   async getOrCreate(scopeKey?: string, scopeLabel?: string): Promise<SessionBrokerEntry<TSession>> {
@@ -34,7 +33,6 @@ export class SessionBroker<TSession extends { abort: () => Promise<unknown>; dis
     try {
       await entry.session.abort().catch(() => {});
       entry.session.dispose();
-      await this.abort(entry.sessionId);
     } finally {
       this.sessions.delete(key);
     }

@@ -74,7 +74,8 @@ function upsertUserFile(userId: string, patch: Record<string, unknown>): void {
       ? JSON.parse(readFileSync(filePath, "utf8")) as { users?: Record<string, unknown> }
       : { users: {} };
     const users = parsed.users && typeof parsed.users === "object" ? parsed.users : {};
-    const previous = users[userId] && typeof users[userId] === "object" ? users[userId] as Record<string, unknown> : {};
+    const previousRaw = users[userId] && typeof users[userId] === "object" ? users[userId] as Record<string, unknown> : {};
+    const { languageCode: _languageCode, language_code: _language_code, ...previous } = previousRaw;
     users[userId] = {
       ...previous,
       ...(typeof previous.timezone === "string" && previous.timezone.trim() ? {} : { timezone: state.userTimezoneCache[userId]?.timezone || defaultTimezone() }),
@@ -136,10 +137,9 @@ export function rememberTelegramUser(user: TelegramUserInput | null | undefined,
   state.telegramUserCache[key] = changed ? next : { ...previous, lastSeenAt };
   const canonicalChanged = !canonical
     || canonical.username !== username
-    || canonical.displayName !== displayName
-    || canonical.languageCode !== languageCode;
+    || canonical.displayName !== displayName;
   if (changed || canonicalChanged || !previous) {
-    upsertUserFile(key, { username, displayName, lastSeenAt, languageCode });
+    upsertUserFile(key, { username, displayName, lastSeenAt });
   }
   enqueueSync({
     repoRoot: repoRoot(),

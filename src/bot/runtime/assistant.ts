@@ -1,6 +1,7 @@
 import type { Context } from "grammy";
 import type { AppConfig, AiAttachment, UploadedFile } from "bot/app/types";
 import type { AiService } from "bot/ai";
+import type { AssistantProgressHandler } from "bot/ai/types";
 import { logger } from "bot/app/logger";
 import { executeAssistantActions, type ExecuteAssistantActionsInput } from "./assistant-actions";
 import { buildTelegramRequestContext } from "bot/telegram/identity";
@@ -49,6 +50,7 @@ export type RunAssistantTaskDeps = {
   onPruneRecentUploads: (scopeKey: string) => Promise<void>;
   onStopWaiting: (task: ActiveConversationTask) => void;
   onSetReaction: (ctx: Context, emoji: string) => Promise<void>;
+  onProgress?: AssistantProgressHandler;
   onReleaseActiveTask: (scopeKey: string, taskId: number) => void;
 };
 
@@ -67,6 +69,7 @@ export async function runAssistantTask(deps: RunAssistantTaskDeps): Promise<void
     onPruneRecentUploads,
     onStopWaiting,
     onSetReaction,
+    onProgress,
     onReleaseActiveTask,
   } = deps;
 
@@ -106,6 +109,7 @@ export async function runAssistantTask(deps: RunAssistantTaskDeps): Promise<void
       scopeKey: task.scopeKey,
       scopeLabel: task.scopeLabel,
       isTaskCurrent: () => !task.cancelled,
+      onProgress,
     } satisfies ExecuteAssistantActionsInput);
     const assistantMs = Date.now() - startedAt;
 

@@ -21,7 +21,6 @@ export type UserRecord = {
   personPath?: string;
   accessLevel?: "admin" | "allowed" | "trusted";
   timezone?: string;
-  languageCode?: string;
   rules?: string[];
   lastSeenAt?: string;
   updatedAt?: string;
@@ -89,7 +88,6 @@ export function loadUsers(repoRoot: string, options?: { defaultTimezone?: string
             ? record.role
             : undefined,
         timezone: cleanText(record.timezone) || defaultTimezone,
-        languageCode: cleanText(record.languageCode) || cleanText(record.language_code),
         rules: cleanRules(record.rules),
         lastSeenAt: cleanText(record.lastSeenAt),
         updatedAt: cleanText(record.updatedAt),

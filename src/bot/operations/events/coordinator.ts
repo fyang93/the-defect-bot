@@ -1,3 +1,5 @@
+import { watch, type FSWatcher } from "node:fs";
+import path from "node:path";
 import type { Bot, Context } from "grammy";
 import type { AppConfig } from "bot/app/types";
 import { logger } from "bot/app/logger";
@@ -11,8 +13,8 @@ const DELIVERY_RETRY_DELAY_MS = 30_000;
 const PREPARATION_RETRY_DELAY_MS = 10 * 60_000;
 const SAFETY_SWEEP_INTERVAL_MS = 10 * 60_000;
 const PERIODIC_PREPARE_WINDOW_MS = 24 * 60 * 60_000;
-const EXTERNAL_SCHEDULE_RESCAN_INTERVAL_MS = 5_000;
-const EXTERNAL_SCHEDULE_POLL_REASON = "external schedule poll";
+const EXTERNAL_SCHEDULE_DEBOUNCE_MS = 250;
+const EXTERNAL_SCHEDULE_WATCH_REASON = "events file changed";
 
 export type ScheduleLoopHandle = {
   stop(): void;
@@ -65,7 +67,8 @@ export class ScheduleCoordinator implements ScheduleLoopHandle {
   private deliveryTimer: NodeJS.Timeout | null = null;
   private preparationTimer: NodeJS.Timeout | null = null;
   private safetySweepTimer: NodeJS.Timeout | null = null;
-  private externalRescanTimer: NodeJS.Timeout | null = null;
+  private externalScheduleWatcher: FSWatcher | null = null;
+  private externalScheduleDebounceTimer: NodeJS.Timeout | null = null;
   private running = false;
   private stopped = false;
   private rescheduleRequested = false;
@@ -92,9 +95,7 @@ export class ScheduleCoordinator implements ScheduleLoopHandle {
         }
       });
     }, SAFETY_SWEEP_INTERVAL_MS);
-    this.externalRescanTimer = setInterval(() => {
-      this.requestReschedule(EXTERNAL_SCHEDULE_POLL_REASON);
-    }, EXTERNAL_SCHEDULE_RESCAN_INTERVAL_MS);
+    this.startExternalScheduleWatch();
   }
 
   stop(): void {
@@ -102,8 +103,10 @@ export class ScheduleCoordinator implements ScheduleLoopHandle {
     this.clearTimers();
     if (this.safetySweepTimer) clearInterval(this.safetySweepTimer);
     this.safetySweepTimer = null;
-    if (this.externalRescanTimer) clearInterval(this.externalRescanTimer);
-    this.externalRescanTimer = null;
+    if (this.externalScheduleWatcher) this.externalScheduleWatcher.close();
+    this.externalScheduleWatcher = null;
+    if (this.externalScheduleDebounceTimer) clearTimeout(this.externalScheduleDebounceTimer);
+    this.externalScheduleDebounceTimer = null;
   }
 
   requestReschedule(reason = "unspecified"): void {
@@ -120,6 +123,27 @@ export class ScheduleCoordinator implements ScheduleLoopHandle {
     if (this.preparationTimer) clearTimeout(this.preparationTimer);
     this.deliveryTimer = null;
     this.preparationTimer = null;
+  }
+
+  private startExternalScheduleWatch(): void {
+    if (this.externalScheduleWatcher) return;
+    const filePath = path.join(this.config.paths.repoRoot, "system", "events.json");
+    const fileName = path.basename(filePath);
+    try {
+      this.externalScheduleWatcher = watch(path.dirname(filePath), (_event, changedName) => {
+        if (changedName && changedName.toString() !== fileName) return;
+        if (this.externalScheduleDebounceTimer) clearTimeout(this.externalScheduleDebounceTimer);
+        this.externalScheduleDebounceTimer = setTimeout(() => {
+          this.externalScheduleDebounceTimer = null;
+          this.requestReschedule(EXTERNAL_SCHEDULE_WATCH_REASON);
+        }, EXTERNAL_SCHEDULE_DEBOUNCE_MS);
+      });
+      this.externalScheduleWatcher.on("error", (error) => {
+        void logger.warn(`schedule file watch failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    } catch (error) {
+      void logger.warn(`schedule file watch unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private async armTimers(reason: string): Promise<void> {
@@ -154,7 +178,7 @@ export class ScheduleCoordinator implements ScheduleLoopHandle {
       }, delay);
     }
 
-    if (reason !== EXTERNAL_SCHEDULE_POLL_REASON) await logger.info(`schedule coordinator armed reason=${JSON.stringify(reason)} nextDeliveryAt=${deliveryAt ? new Date(deliveryAt).toISOString() : "none"} nextPreparationAt=${preparationAt ? new Date(preparationAt).toISOString() : "none"}`);
+    await logger.info(`schedule coordinator armed reason=${JSON.stringify(reason)} nextDeliveryAt=${deliveryAt ? new Date(deliveryAt).toISOString() : "none"} nextPreparationAt=${preparationAt ? new Date(preparationAt).toISOString() : "none"}`);
   }
 
   private async runExclusive(label: string, work: () => Promise<void>): Promise<void> {

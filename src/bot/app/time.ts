@@ -7,10 +7,7 @@ let lastWarnAt = 0;
 
 export type ZonedDateTimeParts = {
   timezone: string;
-  localDate: string;
-  localTime: string;
   localDateTime: string;
-  localWeekday: string;
 };
 
 export function formatIsoInTimezoneParts(iso: string | undefined, timezone: string | null | undefined): ZonedDateTimeParts | null {
@@ -27,17 +24,11 @@ export function formatIsoInTimezoneParts(iso: string | undefined, timezone: stri
     minute: "2-digit",
     second: "2-digit",
     hourCycle: "h23",
-    weekday: "short",
   }).formatToParts(date);
   const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  const localDate = `${byType.year}-${byType.month}-${byType.day}`;
-  const localTime = `${byType.hour}:${byType.minute}:${byType.second}`;
   return {
     timezone: resolvedTimezone,
-    localDate,
-    localTime,
-    localDateTime: `${localDate} ${localTime}`,
-    localWeekday: String(byType.weekday || ""),
+    localDateTime: `${byType.year}-${byType.month}-${byType.day} ${byType.hour}:${byType.minute}:${byType.second}`,
   };
 }
 
