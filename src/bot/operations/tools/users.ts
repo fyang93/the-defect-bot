@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { clearStoredUserAccessLevel, setStoredUserAccessLevel } from "bot/operations/access/roles";
+import { hasUserAccessLevel } from "bot/operations/access/control";
 import { loadUsers, resolveUser } from "bot/operations/context/store";
 import type { ToolContext } from "bot/operations/tools/runtime";
 
@@ -182,11 +183,15 @@ export async function handleUsersUpdateRules(context: ToolContext): Promise<void
 
 export async function handleUsersRecordPerson(context: ToolContext): Promise<void> {
   const { args, cleanText, nowIso, output } = context;
-  context.requireAdminRequester();
+  const requesterUserId = context.requireTrustedRequester();
   const { effectiveUserId } = resolveEffectiveUser(context);
   context.logInfo(`user_record_person: updating user ${effectiveUserId ?? "unknown"}`);
   if (!effectiveUserId) {
     output({ ok: false, error: "userId-required-for-person" });
+    return;
+  }
+  if (effectiveUserId !== requesterUserId && !hasUserAccessLevel(context.config, requesterUserId, "admin")) {
+    output({ ok: false, error: "admin-only-operation" });
     return;
   }
 

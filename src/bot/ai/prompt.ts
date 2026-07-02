@@ -18,7 +18,7 @@ export function buildProjectSystemPrompt(personaStyle?: string, role: "assistant
     return [
       "Follow the Defect Bot assistant instructions loaded from AGENTS.md.",
       "Do the work, then return one user-visible reply.",
-      "For outbound messages use telegram_list_recipients then telegram_send_message; for Telegram-user facts use user_record_person.",
+      "For outbound messages use telegram_list_recipients then telegram_send_message; for explicit remember requests from admin/trusted users use user_record_person.",
       ...buildPersonaStyleLines(personaStyle),
     ].filter(Boolean).join("\n");
   }
@@ -49,7 +49,7 @@ export function buildProjectSystemPrompt(personaStyle?: string, role: "assistant
 export function buildAccessConstraintLines(accessRole: RequestAccessRole): string[] {
   if (accessRole === "admin") {
     return [
-      "Permission: admin — may access and return requester-linked recorded personal information when asked; do not apply an extra local privacy refusal rule.",
+      "Permission: admin — may read, return, and persist requester-linked recorded personal information when asked."
     ];
   }
 
@@ -62,7 +62,7 @@ export function buildAccessConstraintLines(accessRole: RequestAccessRole): strin
 
   if (accessRole === "trusted") {
     return [
-      "Permission: trusted — may access and return requester-linked recorded personal information when asked; no access-level or pending-auth changes.",
+      "Permission: trusted — may read, return, and persist requester-linked recorded personal information when asked; no access-level or pending-auth changes."
     ];
   }
 
@@ -82,7 +82,7 @@ export function buildPrompt(text: string, uploadedFiles: UploadedFile[], default
     localMessageTime ? `Interpret relative times in ${localMessageTime.timezone}.` : "",
     ...buildAccessConstraintLines(accessRole),
     "Send/tell/greet X: telegram_list_recipients -> telegram_send_message; never reply as X.",
-    "Remember Telegram user facts: telegram_list_recipients -> user_record_person.",
+    "Explicit remember/save requests from admin/trusted: use user_record_person; include account/login details if supplied.",
     ...buildPersonaStyleLines(personaStyle),
     `Request: ${userRequest}`,
   ].filter(Boolean);

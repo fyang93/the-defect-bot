@@ -29,6 +29,7 @@ export type ToolContext = {
   asInt: (value: unknown) => number | undefined;
   parseObjectArg: (value: unknown) => Record<string, unknown> | undefined;
   requireAdminRequester: () => number;
+  requireTrustedRequester: () => number;
   resolveUserLookup: () => {
     userId?: number;
     username?: string;
@@ -145,6 +146,12 @@ export async function initializeToolContext(args: ToolArgs, configPath?: string)
     return requesterUserId as number;
   };
 
+  const requireTrustedRequester = (): number => {
+    const requesterUserId = asInt(args.requesterUserId);
+    if (!requesterUserId || !hasUserAccessLevel(config, requesterUserId, "trusted")) output({ ok: false, error: "trusted-operation-required" });
+    return requesterUserId as number;
+  };
+
   const resolveUserLookup = () => {
     const userId = asInt(args.userId);
     const username = cleanText(args.username);
@@ -166,6 +173,7 @@ export async function initializeToolContext(args: ToolArgs, configPath?: string)
     asInt,
     parseObjectArg,
     requireAdminRequester,
+    requireTrustedRequester,
     resolveUserLookup,
     usersDoc,
     logTextContent,

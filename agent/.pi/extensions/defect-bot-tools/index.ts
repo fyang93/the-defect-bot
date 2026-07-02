@@ -133,7 +133,7 @@ const userAddAlias = tool(
 const userRecordPerson = tool(
   "user_record_person",
   "Record User Person Memory",
-  "Create or update a memory/people README for a Telegram user, record durable facts there, and link system/users.json personPath. Use this when the user asks to remember who a Telegram user is or gives biographical facts.",
+  "Create or update a memory/people README for a Telegram user, record durable facts there, and link system/users.json personPath. Use this when an admin/trusted user explicitly asks to remember facts, including account/login details.",
   Type.Object({ requesterUserId: Type.Number(), userId: Type.Number(), name: Type.Optional(Type.String()), aliases: Type.Optional(Type.Array(Type.String())), facts: Type.Optional(Type.Array(Type.String())), personPath: Type.Optional(Type.String()) }),
   "user_record_person",
 );

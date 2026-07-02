@@ -247,6 +247,30 @@ describe("message delivery flow", () => {
     }
   });
 
+  test("trusted user can record own person memory but not another user's", async () => {
+    const { repoRoot, originalCwd } = await createTempConfig();
+    try {
+      await writeFile(path.join(repoRoot, "system", "users.json"), JSON.stringify({ users: { "200": { accessLevel: "trusted", displayName: "Trusted" } } }, null, 2) + "\n", "utf8");
+
+      const own = await runTool("user_record_person", {
+        requesterUserId: 200,
+        userId: 200,
+        name: "Trusted",
+        facts: ["测试账号密码是 abc123"],
+      });
+      expect(own.ok).toBe(true);
+      expect(await runTool("user_record_person", {
+        requesterUserId: 200,
+        userId: 201,
+        name: "Other",
+        facts: ["不该写"],
+      })).toEqual({ ok: false, error: "admin-only-operation" });
+    } finally {
+      process.chdir(originalCwd);
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   test("user_set_timezone updates a narrow field deterministically", async () => {
     const { repoRoot, originalCwd } = await createTempConfig();
     try {

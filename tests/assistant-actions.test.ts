@@ -12,6 +12,39 @@ function config(): AppConfig {
 }
 
 describe("assistant action execution", () => {
+  test("retries memory requests from trusted roles when the model answers without the memory tool", async () => {
+    const prompts: string[] = [];
+    const agentService = {
+      runAssistantTurn: async ({ userRequestText }: { userRequestText: string }) => {
+        prompts.push(userRequestText);
+        return prompts.length === 1
+          ? { message: "我不能长期记录。", facts: [], files: [], attachments: [], completedActions: ["bash"], usedNativeExecution: true }
+          : { message: "已记录。", facts: [], files: [], attachments: [], completedActions: ["user_record_person"], usedNativeExecution: true };
+      },
+    };
+
+    const result = await executeAssistantActions({
+      config: config(),
+      agentService: agentService as any,
+      ctx: { chat: { id: 1, type: "private" } } as any,
+      requesterUserId: 1,
+      uploadedFiles: [],
+      attachments: [],
+      requesterTimezone: "Asia/Tokyo",
+      canDeliverOutbound: true,
+      accessRole: "admin",
+      userRequestText: "帮我记一下：测试账号密码是 abc123",
+      sharedConversationContextText: "",
+      scopeKey: "user:1",
+      scopeLabel: "user 1",
+      isTaskCurrent: () => true,
+    });
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("explicit durable memory request");
+    expect(result.completedActions).toEqual(["user_record_person"]);
+  });
+
   test("retries outbound delivery requests when the model answers without tools", async () => {
     const prompts: string[] = [];
     const agentService = {
