@@ -3,26 +3,42 @@ export type SessionBrokerEntry<TSession extends { abort: () => Promise<unknown>;
   session: TSession;
 };
 
+type StoredSession<TSession extends { abort: () => Promise<unknown>; dispose: () => void }> = SessionBrokerEntry<TSession> & {
+  lastUsedAt: number;
+};
+
 export class SessionBroker<TSession extends { abort: () => Promise<unknown>; dispose: () => void }> {
-  private readonly sessions = new Map<string, SessionBrokerEntry<TSession>>();
+  private readonly sessions = new Map<string, StoredSession<TSession>>();
 
   constructor(
     private readonly create: (scopeKey?: string, scopeLabel?: string) => Promise<SessionBrokerEntry<TSession>>,
+    private readonly maxIdleMs = 30 * 60 * 1000,
   ) {}
 
   async getOrCreate(scopeKey?: string, scopeLabel?: string): Promise<SessionBrokerEntry<TSession>> {
     const key = this.key(scopeKey);
     const existing = this.sessions.get(key);
-    if (existing) return existing;
+    if (existing) {
+      if (Date.now() - existing.lastUsedAt < this.maxIdleMs) {
+        existing.lastUsedAt = Date.now();
+        return existing;
+      }
+      await this.dispose(scopeKey);
+    }
     const created = await this.create(scopeKey, scopeLabel);
-    this.sessions.set(key, created);
+    this.sessions.set(key, { ...created, lastUsedAt: Date.now() });
     return created;
+  }
+
+  touch(scopeKey?: string): void {
+    const existing = this.sessions.get(this.key(scopeKey));
+    if (existing) existing.lastUsedAt = Date.now();
   }
 
   async reset(scopeKey?: string, scopeLabel?: string): Promise<SessionBrokerEntry<TSession>> {
     await this.dispose(scopeKey);
     const created = await this.create(scopeKey, scopeLabel);
-    this.sessions.set(this.key(scopeKey), created);
+    this.sessions.set(this.key(scopeKey), { ...created, lastUsedAt: Date.now() });
     return created;
   }
 

@@ -143,7 +143,7 @@ describe("gateway execution history", () => {
     installFakePiSession(service, [{ role: "assistant", content: [] }], calls);
 
     await expect(service.runAssistantTurn({ userRequestText: "记录一下李博", accessRole: "admin" })).rejects.toThrow("Assistant returned no displayable output");
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
   });
 
   test("assistant records completed actions from Pi SDK tool events", async () => {

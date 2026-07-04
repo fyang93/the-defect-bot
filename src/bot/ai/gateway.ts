@@ -372,7 +372,13 @@ export class AiService {
 
     let lastCompletedActions: string[] = [];
     let lastUsedNativeExecution = false;
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      if (attempt === 3) {
+        if (lastCompletedActions.length > 0) break;
+        await logger.warn("resetting assistant session after repeated empty output");
+        await this.disposeSession(input.scopeKey);
+      }
       if (input.isTaskCurrent && !input.isTaskCurrent()) {
         await logger.warn("assistant agent prompt skipped because task is stale");
         return { message: "", usedNativeExecution: false, completedActions: [], files: [], attachments: [] };
@@ -423,6 +429,7 @@ export class AiService {
       await logger.warn(`discarded assistant output attempt=${attempt} reason=no-tools-and-no-displayable-text`);
     }
     await logger.warn(`assistant produced no valid output after retries actions=${JSON.stringify(lastCompletedActions)} usedNativeExecution=${lastUsedNativeExecution ? "yes" : "no"}`);
+    if (lastCompletedActions.length === 0) await this.disposeSession(input.scopeKey);
     throw new Error("Assistant returned no displayable output.");
   }
 
@@ -500,6 +507,7 @@ export class AiService {
     const entry = await this.getOrCreateSession(scopeKey, scopeLabel);
     await logger.info("pi sdk assistant text prompt request");
     const response = await this.promptSessionForAssistant(entry.session, text, attachments, onProgress);
+    this.sessions.touch(scopeKey);
     touchActivity();
     await logger.info(`pi sdk assistant text prompt raw=${JSON.stringify(response.rawText)}`);
     return response;
@@ -555,6 +563,7 @@ export class AiService {
       try {
         await logger.info(attempt === 1 ? "pi sdk prompt request" : "pi sdk prompt retry request");
         rawText = await this.promptSessionForLightText(entry.session, promptText, attachments, "assistant");
+        this.sessions.touch(scopeKey);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (/no text output/i.test(message) && attempt < 2) {
@@ -597,6 +606,9 @@ export class AiService {
     const completedActions = result.completedActions;
     const executionParts = summarizeToolResults(result.newMessages);
     await logger.info(`pi sdk text prompt response ms=${Date.now() - startedAt} sessionId=${session.sessionId} rawChars=${rawText.length} messages=${result.newMessages.length} mode=full role=${role} actions=${completedActions.length}`);
+    if (!rawText && completedActions.length === 0) {
+      await logger.warn(`pi sdk assistant produced no text/actions sessionId=${session.sessionId} messages=${JSON.stringify(summarizeMessagesForDebug(result.newMessages))}`);
+    }
     if (executionParts.length > 0) {
       await logger.info(`pi sdk ${role} execution parts ${JSON.stringify(executionParts)}`);
     }
