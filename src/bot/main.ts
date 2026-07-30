@@ -14,7 +14,7 @@ import { rememberFeishuMessage } from "bot/feishu/registry";
 const HELP = [
   "Defect Bot 飞书入口。",
   "",
-  "私聊可直接发送；群聊中请 @ 机器人。支持文字、图片、文档、音频和视频。",
+  "私聊可直接发送；群聊中请 @ 机器人。未 @ 的近期消息和附件会暂存，在后续 @ 机器人或回复该消息时作为上下文。支持文字、图片、文档、音频和视频。",
   "/help - 显示帮助",
   "/new - 新建当前会话",
   "/stop - 中止当前任务",
@@ -34,6 +34,9 @@ const channel = createLarkChannel({
   source: "the-defect-bot",
   loggerLevel: LoggerLevel.warn,
   policy: { requireMention: false, dmMode: "open" },
+  // ConversationController saves each message's resources before merging turns.
+  // Disable SDK-level batching because merged resources lose their originating message_id.
+  safety: { batch: { text: { delayMs: 0 } } },
   outbound: { allowedFileDirs: [config.paths.repoRoot, config.paths.tmpDir], streamInitialText: "思考中…" },
 });
 const controller = new ConversationController({ config, channel, agentService });
@@ -112,18 +115,29 @@ async function handleMenuEvent(event: FeishuMenuEvent): Promise<void> {
   }),
 });
 
-channel.on("message", (message) => { void handleMessage(message).catch(async (error) => {
-  if (isFeishuMessageGoneError(error)) return;
-  await logger.error(`feishu message failed message=${message.messageId}: ${error instanceof Error ? error.stack || error.message : String(error)}`);
-  await reply(message, `错误：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
-}); });
+channel.on("message", async (message) => {
+  try {
+    await handleMessage(message);
+  } catch (error) {
+    if (isFeishuMessageGoneError(error)) return;
+    await logger.error(`feishu message failed message=${message.messageId}: ${error instanceof Error ? error.stack || error.message : String(error)}`);
+    await reply(message, `错误：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
+  }
+});
 channel.on("cardAction", (event: CardActionEvent) => {
   const action = parseFeishuModelAction(event.action.value); if (!action) return;
+  void logger.info(`Feishu model card action=${action.action} message=${event.messageId} sender=${event.operator.openId}`);
   setTimeout(() => void (async () => {
-    if (action.action === "set_model") { await applyModel(action.key); await channel.updateCard(event.messageId, feishuModelSelectedCard(action.key)); }
-    else await channel.updateCard(event.messageId, await modelsCard(action.action === "models" ? action.provider : undefined, action.action === "models" ? action.page : 0));
-  })().catch((error) => logger.warn(`model card action failed: ${error instanceof Error ? error.message : String(error)}`)), 300);
+    try {
+      if (action.action === "set_model") { await applyModel(action.key); await channel.updateCard(event.messageId, feishuModelSelectedCard(action.key)); }
+      else await channel.updateCard(event.messageId, await modelsCard(action.action === "models" ? action.provider : undefined, action.action === "models" ? action.page : 0));
+    } catch (error) {
+      await logger.warn(`model card action failed: ${error instanceof Error ? error.message : String(error)}`);
+      await channel.send(event.chatId, { text: `Pi 模型错误：${error instanceof Error ? error.message : String(error)}` }).catch(() => undefined);
+    }
+  })(), 300);
 });
+channel.on("reject", (event) => { void logger.info(`Feishu message rejected reason=${event.reason} sender=${event.senderId}`); });
 channel.on("error", (error) => { void logger.error(`feishu channel error: ${error.message}`); });
 
 await logger.info(`bot process starting pid=${process.pid}`);

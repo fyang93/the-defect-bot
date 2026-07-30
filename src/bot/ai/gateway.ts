@@ -10,7 +10,7 @@ import { formatIsoInTimezoneParts } from "bot/app/time";
 import { state, touchActivity } from "bot/app/state";
 import { buildPersonaStyleLines, buildProjectSystemPrompt, type RequestPermissionMode } from "./prompt";
 import { extractAiTurnResultFromText, isDisplayableUserText } from "./response";
-import type { AiTurnResult, AssistantPlanResult, AssistantProgressHandler, ReminderTextContext } from "./types";
+import type { AiTurnResult, AssistantPlanResult, AssistantProgressHandler, AssistantTextDeltaHandler, ReminderTextContext } from "./types";
 import { ReplyComposer, type ReplyComposerInputContext } from "./reply-composer";
 import { StructuredReasoner } from "./structured-reasoner";
 import { PromptTemplateRenderer } from "./prompt-templates";
@@ -82,6 +82,11 @@ function skillNameFromReadArgs(args: unknown): string | null {
   return path.basename(path.dirname(filePath));
 }
 
+function compactToolProgress(text: string): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length > 120 ? `${line.slice(0, 117)}...` : line;
+}
+
 function statusTextFromAgentEvent(event: unknown): string | null {
   const record = asRecord(event);
   if (!record) return null;
@@ -111,7 +116,14 @@ function statusTextFromAgentEvent(event: unknown): string | null {
       if (skill) return `正在加载 skill：${skill}`;
       return `正在调用工具：${tool}${preview ? ` ${preview}` : ""}`;
     }
-    case "tool_execution_update": return `工具运行中：${toolNameFromEvent(record)}`;
+    case "tool_execution_update": {
+      const tool = toolNameFromEvent(record);
+      const content = asRecord(record.partialResult)?.content;
+      const progress = Array.isArray(content)
+        ? content.map((item) => asRecord(item)?.text).find((text) => typeof text === "string")
+        : undefined;
+      return `工具运行中：${tool}${progress && tool !== "bash" ? ` · ${compactToolProgress(progress)}` : ""}`;
+    }
     case "tool_execution_end": return `${record.isError ? "工具失败" : "工具完成"}：${toolNameFromEvent(record)}`;
     default: return null;
   }
@@ -362,6 +374,7 @@ export class AiService {
     scopeLabel?: string;
     isTaskCurrent?: () => boolean;
     onProgress?: AssistantProgressHandler;
+    onTextDelta?: AssistantTextDeltaHandler;
   }): Promise<AssistantPlanResult> {
     const localMessageTime = formatIsoInTimezoneParts(input.messageTime, input.requesterTimezone?.trim() || this.config.bot.defaultTimezone);
     const nativeAttachments = input.attachments || [];
@@ -407,7 +420,7 @@ export class AiService {
             "Use the needed tools, then return the final user-visible reply for this turn.",
           ].join("\n");
       const promptAttachments = await this.filterAttachmentsForSelectedModel(policyFilteredAttachments, "assistant turn");
-      const response = await this.promptInScopedAssistantSession(attemptPrompt, promptAttachments, input.scopeKey, input.scopeLabel, input.onProgress);
+      const response = await this.promptInScopedAssistantSession(attemptPrompt, promptAttachments, input.scopeKey, input.scopeLabel, input.onProgress, input.onTextDelta);
       if (input.isTaskCurrent && !input.isTaskCurrent()) {
         await logger.warn("assistant agent response ignored because task became stale");
         return { message: "", usedNativeExecution: false, completedActions: response.completedActions, files: [], attachments: [] };
@@ -521,10 +534,10 @@ export class AiService {
     });
   }
 
-  private async promptInScopedAssistantSession(text: string, attachments: AiAttachment[], scopeKey?: string, scopeLabel?: string, onProgress?: AssistantProgressHandler): Promise<{ rawText: string; usedNativeExecution: boolean; completedActions: string[] }> {
+  private async promptInScopedAssistantSession(text: string, attachments: AiAttachment[], scopeKey?: string, scopeLabel?: string, onProgress?: AssistantProgressHandler, onTextDelta?: AssistantTextDeltaHandler): Promise<{ rawText: string; usedNativeExecution: boolean; completedActions: string[] }> {
     const entry = await this.getOrCreateSession(scopeKey, scopeLabel);
     await logger.info("pi sdk assistant text prompt request");
-    const response = await this.promptSessionForAssistant(entry.session, text, attachments, onProgress);
+    const response = await this.promptSessionForAssistant(entry.session, text, attachments, onProgress, onTextDelta);
     this.sessions.touch(scopeKey);
     touchActivity();
     await logger.info(`pi sdk assistant text prompt raw=${JSON.stringify(response.rawText)}`);
@@ -611,15 +624,15 @@ export class AiService {
     return rawText;
   }
 
-  async promptSessionForAssistant(session: AgentSession, text: string, attachments: AiAttachment[], onProgress?: AssistantProgressHandler): Promise<{ rawText: string; usedNativeExecution: boolean; completedActions: string[] }> {
-    return this.promptSessionForAgent(session, text, attachments, "assistant", onProgress);
+  async promptSessionForAssistant(session: AgentSession, text: string, attachments: AiAttachment[], onProgress?: AssistantProgressHandler, onTextDelta?: AssistantTextDeltaHandler): Promise<{ rawText: string; usedNativeExecution: boolean; completedActions: string[] }> {
+    return this.promptSessionForAgent(session, text, attachments, "assistant", onProgress, onTextDelta);
   }
 
-  private async promptSessionForAgent(session: AgentSession, text: string, attachments: AiAttachment[], role: "assistant", onProgress?: AssistantProgressHandler): Promise<{ rawText: string; usedNativeExecution: boolean; completedActions: string[] }> {
+  private async promptSessionForAgent(session: AgentSession, text: string, attachments: AiAttachment[], role: "assistant", onProgress?: AssistantProgressHandler, onTextDelta?: AssistantTextDeltaHandler): Promise<{ rawText: string; usedNativeExecution: boolean; completedActions: string[] }> {
     const promptAttachments = await this.filterAttachmentsForSelectedModel(attachments, `${role} agent prompt`);
     const startedAt = Date.now();
     await logger.info(`pi sdk text prompt start sessionId=${session.sessionId} model=${JSON.stringify(state.model || "default")} textChars=${text.length} attachments=${promptAttachments.length} mode=full role=${role}`);
-    const result = await this.runPiPrompt(session, text, promptAttachments, true, onProgress);
+    const result = await this.runPiPrompt(session, text, promptAttachments, true, onProgress, onTextDelta);
     const rawText = result.rawText.trim();
     const completedActions = result.completedActions;
     const executionParts = summarizeToolResults(result.newMessages);
@@ -649,13 +662,20 @@ export class AiService {
     return rawText;
   }
 
-  private async runPiPrompt(session: AgentSession, text: string, attachments: AiAttachment[], collectTools: boolean, onProgress?: AssistantProgressHandler): Promise<{ rawText: string; completedActions: string[]; newMessages: unknown[] }> {
+  private async runPiPrompt(session: AgentSession, text: string, attachments: AiAttachment[], collectTools: boolean, onProgress?: AssistantProgressHandler, onTextDelta?: AssistantTextDeltaHandler): Promise<{ rawText: string; completedActions: string[]; newMessages: unknown[] }> {
     const beforeCount = session.messages.length;
     const completedActions: string[] = [];
     const chunks: string[] = [];
     let lastToolProgressAt = 0;
     const unsubscribe = session.subscribe((event) => {
-      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") chunks.push(event.assistantMessageEvent.delta);
+      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+        chunks.push(event.assistantMessageEvent.delta);
+        if (onTextDelta) {
+          void Promise.resolve(onTextDelta(event.assistantMessageEvent.delta)).catch((error) => {
+            void logger.warn(`assistant text delta handler failed: ${error instanceof Error ? error.message : String(error)}`);
+          });
+        }
+      }
       if (collectTools && event.type === "tool_execution_end" && !event.isError) completedActions.push(toolNameFromEvent(event));
       const progress = onProgress ? statusTextFromAgentEvent(event) : null;
       if (progress) {

@@ -2,6 +2,40 @@ export function isFeishuMessageAddressed(message: { chatType: "p2p" | "group"; m
   return message.chatType === "p2p" || message.mentionedBot;
 }
 
+export function isActiveFeishuMessageRecall(activeMessageId: string | undefined, recalledMessageId: string | undefined): boolean {
+  return Boolean(activeMessageId && activeMessageId === recalledMessageId);
+}
+
+export function feishuContextMessageId(message: { messageId: string; rootId?: string; replyToMessageId?: string }): string | undefined {
+  return message.rootId && message.rootId !== message.messageId
+    ? message.rootId
+    : message.replyToMessageId && message.replyToMessageId !== message.messageId ? message.replyToMessageId : undefined;
+}
+
+export function selectBufferedInputs<T extends { messageId: string; chatId: string; senderId: string }>(
+  inputs: readonly T[],
+  message: { chatId: string; senderId: string; replyToMessageId?: string },
+  limit = 3,
+): T[] {
+  const exact = message.replyToMessageId
+    ? inputs.filter((item) => item.chatId === message.chatId && item.messageId === message.replyToMessageId)
+    : [];
+  return exact.length
+    ? exact
+    : inputs.filter((item) => item.chatId === message.chatId && item.senderId === message.senderId).slice(-limit);
+}
+
+export function bufferedFeishuText(inputs: readonly { messageId: string; content: string }[]): string {
+  const lines = inputs.map((item) => `- messageId=${item.messageId}: ${item.content.trim() || "用户上传了一个附件。"}`);
+  return lines.length ? ["Recent unaddressed Feishu messages from this user:", ...lines].join("\n") : "";
+}
+
+export function assistantTextDelta(event: Record<string, unknown>): string {
+  if (event.type !== "message_update" || !event.assistantMessageEvent || typeof event.assistantMessageEvent !== "object") return "";
+  const update = event.assistantMessageEvent as Record<string, unknown>;
+  return update.type === "text_delta" && typeof update.delta === "string" ? update.delta : "";
+}
+
 export function isFeishuMessageGoneError(error: unknown): boolean {
   let current = error;
   for (let depth = 0; depth < 3 && current && typeof current === "object"; depth += 1) {

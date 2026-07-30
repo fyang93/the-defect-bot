@@ -43,3 +43,4 @@ export type ReminderTextContext = {
 };
 
 export type AssistantProgressHandler = (message: string) => Promise<void> | void;
+export type AssistantTextDeltaHandler = (delta: string) => Promise<void> | void;

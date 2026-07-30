@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { feishuModelPickerCard, isFeishuMessageAddressed, isFeishuMessageGoneError, parseFeishuCommand, parseFeishuMenuEventKey, parseFeishuModelAction } from "../src/bot/feishu/message";
+import { bufferedFeishuText, feishuContextMessageId, feishuModelPickerCard, isActiveFeishuMessageRecall, isFeishuMessageAddressed, isFeishuMessageGoneError, parseFeishuCommand, parseFeishuMenuEventKey, parseFeishuModelAction, selectBufferedInputs } from "../src/bot/feishu/message";
 
 describe("Feishu message helpers", () => {
   test("requires a mention only in group chats", () => {
@@ -19,6 +19,19 @@ describe("Feishu message helpers", () => {
     expect(parseFeishuMenuEventKey("current_reminders")).toBe("reminders");
     expect(parseFeishuMenuEventKey("switch_model")).toBe("model");
     expect(parseFeishuCommand("普通聊天")).toBeNull();
+  });
+
+  test("selects group context from an exact reply or recent messages by the same sender", () => {
+    const inputs = [
+      { messageId: "a", chatId: "chat", senderId: "alice", content: "A" },
+      { messageId: "b", chatId: "chat", senderId: "bob", content: "B" },
+      { messageId: "c", chatId: "chat", senderId: "alice", content: "C" },
+    ];
+    expect(selectBufferedInputs(inputs, { chatId: "chat", senderId: "bob", replyToMessageId: "a" })).toEqual([inputs[0]]);
+    expect(selectBufferedInputs(inputs, { chatId: "chat", senderId: "alice" }, 1)).toEqual([inputs[2]]);
+    expect(bufferedFeishuText([{ messageId: "a", content: "" }])).toContain("用户上传了一个附件");
+    expect(feishuContextMessageId({ messageId: "current", rootId: "root", replyToMessageId: "parent" })).toBe("root");
+    expect(isActiveFeishuMessageRecall("current", "current")).toBe(true);
   });
 
   test("recognizes recalled-message errors", () => {

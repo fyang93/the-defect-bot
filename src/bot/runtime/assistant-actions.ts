@@ -1,6 +1,6 @@
 import { logger } from "bot/app/logger";
 import type { AiService } from "bot/ai";
-import type { AiTurnResult, AssistantProgressHandler } from "bot/ai/types";
+import type { AiTurnResult, AssistantProgressHandler, AssistantTextDeltaHandler } from "bot/ai/types";
 import type { AiAttachment, AppConfig, UploadedFile } from "bot/app/types";
 
 export type AssistantTurnResult = { message: string; files: string[]; attachments: AiAttachment[]; facts: string[]; hasSideEffectfulActions: boolean; completedActions: string[] };
@@ -21,6 +21,7 @@ export type ExecuteAssistantActionsInput = {
   scopeLabel?: string;
   isTaskCurrent?: () => boolean;
   onProgress?: AssistantProgressHandler;
+  onTextDelta?: AssistantTextDeltaHandler;
 };
 
 function outboundRequest(text: string): boolean { return /(?:给|向).{1,40}(?:发|发送|打个?招呼|问候|告诉|转发)|(?:send|message|tell|greet)\s+.{1,40}/i.test(text); }
@@ -32,7 +33,7 @@ export async function executeAssistantActions(input: ExecuteAssistantActionsInpu
     userRequestText: text, requesterUserId: input.requesterUserId, chatId: input.chatId, chatType: input.chatType,
     permissionMode: "full", uploadedFiles: input.uploadedFiles || [], attachments: input.attachments || [], messageTime: input.messageTime,
     requesterTimezone: input.requesterTimezone, sharedConversationContextText: input.sharedConversationContextText,
-    scopeKey: input.scopeKey, scopeLabel: input.scopeLabel, isTaskCurrent: current, onProgress: input.onProgress,
+    scopeKey: input.scopeKey, scopeLabel: input.scopeLabel, isTaskCurrent: current, onProgress: input.onProgress, onTextDelta: input.onTextDelta,
   });
   let planned = await run(input.userRequestText);
   if (current() && !planned.usedNativeExecution && outboundRequest(input.userRequestText)) {

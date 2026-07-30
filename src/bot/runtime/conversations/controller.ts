@@ -4,10 +4,11 @@ import type { AiAttachment, AppConfig, UploadedFile } from "bot/app/types";
 import { touchActivity } from "bot/app/state";
 import { logger } from "bot/app/logger";
 import { fetchFeishuReplyContext, saveFeishuResources } from "bot/feishu/transport";
+import { bufferedFeishuText, isFeishuMessageGoneError, selectBufferedInputs } from "bot/feishu/message";
 import { runAssistantTask, type ActiveConversationTask } from "bot/runtime/assistant";
 
 type Input = { text: string; files: UploadedFile[]; attachments: AiAttachment[]; messageTime: string };
-type Buffered = { message: NormalizedMessage; input: Input; at: number };
+type Buffered = { messageId: string; chatId: string; senderId: string; content: string; input: Input; at: number };
 type Turn = { task: ActiveConversationTask; message: NormalizedMessage; input: Input; phase: "collecting" | "running"; updatedAt: number; timer?: NodeJS.Timeout; reactionId?: string };
 const CONTEXT_TTL_MS = 10 * 60 * 1000;
 const CONTEXT_ITEMS = 3;
@@ -48,7 +49,7 @@ export class ConversationController {
 
   async handleMessageRecall(messageId: string | undefined): Promise<void> {
     if (!messageId) return;
-    this.buffered = this.buffered.filter((item) => item.message.messageId !== messageId);
+    this.buffered = this.buffered.filter((item) => item.messageId !== messageId);
     const active = [...this.turns.entries()].find(([, turn]) => turn.task.sourceMessageId === messageId);
     if (active) await this.interruptActiveTask("source message recalled", active[0]);
   }
@@ -56,22 +57,27 @@ export class ConversationController {
   async resetSession(message: NormalizedMessage): Promise<string> {
     const currentScope = scope(message);
     await this.interruptActiveTask("new session", currentScope.key);
-    this.buffered = this.buffered.filter((item) => item.message.chatId !== message.chatId || item.message.senderId !== message.senderId);
+    this.buffered = this.buffered.filter((item) => item.chatId !== message.chatId || item.senderId !== message.senderId);
     return this.deps.agentService.newSession(currentScope.key, currentScope.label);
   }
 
   async resetUserSession(openId: string): Promise<string> {
     const scopeKey = `user:${openId}`;
     await this.interruptActiveTask("new session from Feishu menu", scopeKey);
-    this.buffered = this.buffered.filter((item) => item.message.senderId !== openId);
+    this.buffered = this.buffered.filter((item) => item.senderId !== openId);
     return this.deps.agentService.newSession(scopeKey, `Feishu user ${openId}`);
   }
 
   async stash(message: NormalizedMessage): Promise<void> {
-    const saved = message.resources.length ? await saveFeishuResources(this.deps.channel, this.deps.config, message) : { files: [], attachments: [] };
-    const input = { text: message.content.trim() || "用户上传了一个附件。", ...saved, messageTime: referenceTime(message) };
-    this.pruneBuffered();
-    this.buffered.push({ message, input, at: Date.now() });
+    try {
+      const saved = message.resources.length ? await saveFeishuResources(this.deps.channel, this.deps.config, message) : { files: [], attachments: [] };
+      const input = { text: message.content.trim() || "用户上传了一个附件。", ...saved, messageTime: referenceTime(message) };
+      this.pruneBuffered();
+      this.buffered.push({ messageId: message.messageId, chatId: message.chatId, senderId: message.senderId, content: message.content, input, at: Date.now() });
+      await logger.info(`buffered unaddressed Feishu input sender=${message.senderId} message=${message.messageId} files=${saved.files.length} images=${saved.attachments.length}`);
+    } catch (error) {
+      await logger.warn(`ignored unaddressed Feishu input after resource error message=${message.messageId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   async handleMessage(message: NormalizedMessage): Promise<void> {
@@ -82,7 +88,7 @@ export class ConversationController {
     ]);
     const currentScope = scope(message);
     const prior = this.takeBuffered(message);
-    const contextText = prior.length ? ["Recent unaddressed Feishu messages from this user:", ...prior.map((item) => `- messageId=${item.message.messageId}: ${item.input.text}`)].join("\n") : "";
+    const contextText = bufferedFeishuText(prior);
     let input: Input = {
       text: [contextText, replyContext, "Current user message:", message.content.trim() || "用户上传了一个附件。"].filter(Boolean).join("\n\n"),
       files: [...prior.flatMap((item) => item.input.files), ...saved.files], attachments: [...prior.flatMap((item) => item.input.attachments), ...saved.attachments], messageTime: referenceTime(message),
@@ -103,16 +109,27 @@ export class ConversationController {
   private pruneBuffered(): void { this.buffered = this.buffered.filter((item) => Date.now() - item.at <= CONTEXT_TTL_MS); }
   private takeBuffered(message: NormalizedMessage): Buffered[] {
     this.pruneBuffered();
-    const exact = message.replyToMessageId ? this.buffered.filter((item) => item.message.messageId === message.replyToMessageId && item.message.chatId === message.chatId) : [];
-    const selected = exact.length ? exact : this.buffered.filter((item) => item.message.chatId === message.chatId && item.message.senderId === message.senderId).slice(-CONTEXT_ITEMS);
-    const used = new Set(selected); this.buffered = this.buffered.filter((item) => !used.has(item)); return selected;
+    const selected = selectBufferedInputs(this.buffered, message, CONTEXT_ITEMS);
+    const used = new Set(selected);
+    this.buffered = this.buffered.filter((item) => !used.has(item));
+    return selected;
   }
 
   private async launch(scopeKey: string, taskId: number): Promise<void> {
     const turn = this.turns.get(scopeKey);
     if (!turn || turn.task.id !== taskId || turn.task.cancelled) return;
     turn.phase = "running";
-    turn.reactionId = await this.deps.channel.addReaction(turn.message.messageId, "OnIt").catch(() => undefined);
+    let messageGone = false;
+    turn.reactionId = await this.deps.channel.addReaction(turn.message.messageId, "OnIt").catch(async (error) => {
+      messageGone = isFeishuMessageGoneError(error);
+      if (!messageGone) await logger.warn(`Feishu waiting reaction failed message=${turn.message.messageId}: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    });
+    if (messageGone) {
+      this.turns.delete(scopeKey);
+      await logger.info(`skipped withdrawn or deleted Feishu message ${turn.message.messageId}`);
+      return;
+    }
     await runAssistantTask({
       config: this.deps.config, channel: this.deps.channel, message: turn.message, task: turn.task, promptText: turn.input.text,
       uploadedFiles: turn.input.files, attachments: turn.input.attachments, messageTime: turn.input.messageTime, agentService: this.deps.agentService,

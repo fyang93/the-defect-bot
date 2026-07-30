@@ -34,6 +34,8 @@ These tools call operations under `src/bot/operations/**`; canonical `system/` s
 
 `src/bot/feishu/**` owns message normalization helpers, entity registries, uploads, and Feishu output. `src/bot/main.ts` owns the long-connection channel, `application.bot.menu_v6` custom-menu events, text commands, and model-card dispatch. Scheduled delivery reuses the connected channel.
 
+SDK-level message batching is disabled: every inbound resource must be downloaded with its originating `message_id` before `ConversationController` coalesces consecutive inputs. In group chats, unmentioned messages are buffered for ten minutes; an exact reply selects that message, otherwise a later mention receives up to three recent messages from the same sender. Active replies use a streaming waiting card and are recalled when superseded or cancelled.
+
 Feishu `open_id` and `chat_id` values are strings throughout runtime and persisted JSON. Event target IDs are also strings.
 
 ## Credentials
