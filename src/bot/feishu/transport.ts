@@ -45,6 +45,18 @@ export async function fetchFeishuReplyContext(channel: LarkChannel, message: Nor
   return normalized.content.trim() ? `Feishu topic/reply context (messageId=${contextMessageId}):\n${normalized.content.trim()}` : "";
 }
 
+async function downloadMessageResource(channel: LarkChannel, messageId: string, resource: ResourceDescriptor): Promise<Buffer> {
+  const response = await channel.rawClient.im.v1.messageResource.get({
+    path: { message_id: messageId, file_key: resource.fileKey },
+    params: { type: resource.type === "image" ? "image" : "file" },
+  });
+  const chunks: Buffer[] = [];
+  for await (const chunk of response.getReadableStream()) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
 export async function saveFeishuResources(channel: LarkChannel, config: AppConfig, message: NormalizedMessage): Promise<{ files: UploadedFile[]; attachments: AiAttachment[] }> {
   const files: UploadedFile[] = [];
   const attachments: AiAttachment[] = [];
@@ -53,7 +65,7 @@ export async function saveFeishuResources(channel: LarkChannel, config: AppConfi
   await mkdir(absoluteDir, { recursive: true });
   for (const [index, resource] of message.resources.entries()) {
     if (resource.type === "sticker") continue;
-    const bytes = await channel.downloadResource(resource.fileKey, resource.type === "image" ? "image" : "file");
+    const bytes = await downloadMessageResource(channel, message.messageId, resource);
     const originalName = safeFilename(resource.fileName || `${resource.type}.bin`);
     const filename = `${message.messageId}-${index}-${originalName}`;
     const absolutePath = path.join(absoluteDir, filename);
