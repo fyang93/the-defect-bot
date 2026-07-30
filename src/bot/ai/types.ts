@@ -1,7 +1,7 @@
 import type { AiAttachment } from "bot/app/types";
 
 export type ActionTargetReference = {
-  id?: number;
+  id?: string;
   username?: string;
   displayName?: string;
 };
@@ -18,11 +18,6 @@ export type ScheduleDraft = {
   reminders?: Array<{ id?: string; offsetMinutes: number; enabled?: boolean; label?: string }>;
   targetUser?: ActionTargetReference;
   targetUsers?: ActionTargetReference[];
-};
-
-export type PendingAuthorizationDraft = {
-  username: string;
-  expiresAt: string;
 };
 
 export type AiTurnResult = {

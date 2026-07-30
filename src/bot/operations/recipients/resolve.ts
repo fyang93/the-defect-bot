@@ -1,94 +1,28 @@
-import { readdirSync, readFileSync } from "node:fs";
-import path from "node:path";
 import type { AppConfig } from "bot/app/types";
-import { listAuthorizedUserIds } from "bot/operations/access/roles";
-import { findTelegramChats, findTelegramUsers, listKnownTelegramChats, listKnownTelegramUsers } from "bot/telegram/registry";
+import { findFeishuChats, findFeishuUsers, listKnownFeishuChats, listKnownFeishuUsers } from "bot/feishu/registry";
 
-export type RecipientCandidate = {
-  recipientKind: "user" | "chat";
-  recipientId: number;
-  recipientLabel: string;
-};
+export type RecipientCandidate = { recipientKind: "user" | "chat"; recipientId: string; recipientLabel: string };
+export type ResolveRecipientInput = { id?: string; recipientId?: string; query?: string; displayName?: string; title?: string };
 
-export type ResolveRecipientInput = {
-  id?: number;
-  recipientId?: number;
-  query?: string;
-  username?: string;
-  displayName?: string;
-  title?: string;
-};
+function clean(value: unknown): string | undefined { return typeof value === "string" && value.trim() ? value.trim() : undefined; }
+function dedupe(items: RecipientCandidate[]): RecipientCandidate[] { return Array.from(new Map(items.map((item) => [`${item.recipientKind}:${item.recipientId}`, item])).values()); }
 
-
-function cleanText(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+export function listFeishuRecipients(config: AppConfig, kind: "groups" | "users" | "all" = "groups"): RecipientCandidate[] {
+  const chats = kind === "users" ? [] : listKnownFeishuChats(config).filter((chat) => chat.type !== "p2p").map((chat) => ({ recipientKind: "chat" as const, recipientId: chat.id, recipientLabel: chat.title || chat.id }));
+  const users = kind === "groups" ? [] : listKnownFeishuUsers(config).map((user) => ({ recipientKind: "user" as const, recipientId: user.id, recipientLabel: user.displayName }));
+  return [...chats, ...users];
 }
 
-function normalizeName(value: string): string {
-  return value.trim().replace(/^@+/, "").toLowerCase();
-}
-
-function userLabel(user: { username?: string; displayName: string }): string {
-  return user.username ? `${user.displayName} (@${user.username})` : user.displayName;
-}
-
-function dedupe(candidates: RecipientCandidate[]): RecipientCandidate[] {
-  return Array.from(new Map(candidates.map((candidate) => [`${candidate.recipientKind}:${candidate.recipientId}`, candidate])).values());
-}
-
-export function listTelegramRecipients(config: AppConfig, kind: "groups" | "users" | "all" = "groups"): RecipientCandidate[] {
-  const groups = kind === "users" ? [] : listKnownTelegramChats()
-    .filter((chat) => chat.type !== "private")
-    .map((chat) => ({ recipientKind: "chat" as const, recipientId: chat.id, recipientLabel: chat.title || String(chat.id) }));
-  const users = kind === "groups" ? [] : listKnownTelegramUsers(listAuthorizedUserIds(config))
-    .map((user) => ({ recipientKind: "user" as const, recipientId: user.id, recipientLabel: userLabel(user) }));
-  return [...groups, ...users];
-}
-
-function memoryUsernamesForQuery(config: AppConfig, query: string): string[] {
-  const peopleDir = path.join(config.paths.repoRoot, "memory", "people");
-  const target = normalizeName(query);
-  try {
-    return readdirSync(peopleDir, { withFileTypes: true }).flatMap((entry) => {
-      if (!entry.isDirectory()) return [];
-      const text = readFileSync(path.join(peopleDir, entry.name, "README.md"), "utf8");
-      const names = [
-        text.match(/^title:\s*(.+)$/m)?.[1],
-        ...Array.from(text.matchAll(/aliases:\s*\[([^\]]+)\]/g)).flatMap((match) => match[1].split(",")),
-      ].map((item) => item?.replace(/["']/g, "").trim()).filter((item): item is string => Boolean(item));
-      if (!names.some((name) => normalizeName(name) === target)) return [];
-      return Array.from(text.matchAll(/Telegram[：:]\s*@?([A-Za-z0-9_]+)/gi)).map((match) => match[1]);
-    });
-  } catch {
-    return [];
-  }
-}
-
-function memoryUserCandidates(config: AppConfig, query: string): RecipientCandidate[] {
-  return memoryUsernamesForQuery(config, query)
-    .flatMap((username) => findTelegramUsers({ username }, listAuthorizedUserIds(config)))
-    .map((user) => ({ recipientKind: "user" as const, recipientId: user.id, recipientLabel: userLabel(user) }));
-}
-
-export function findTelegramRecipientCandidates(config: AppConfig, input: ResolveRecipientInput & { kind?: "groups" | "users" | "all" }): RecipientCandidate[] {
-  const directId = input.id ?? input.recipientId;
-  const query = cleanText(input.query);
-  const explicitUsername = cleanText(input.username)?.replace(/^@+/, "");
-  const username = explicitUsername || (query?.startsWith("@") ? query.replace(/^@+/, "") : undefined);
-  const displayName = cleanText(input.displayName);
-  const title = cleanText(input.title) || query;
+export function findFeishuRecipientCandidates(config: AppConfig, input: ResolveRecipientInput & { kind?: "groups" | "users" | "all" }): RecipientCandidate[] {
+  const id = input.id || input.recipientId;
+  const query = clean(input.query);
   const kind = input.kind || "all";
-  const matchedChats = kind === "users" ? [] : findTelegramChats({ id: directId, username, title, displayName }).filter((chat) => chat.type !== "private");
-  const matchedUsers = kind === "groups" ? [] : findTelegramUsers({ id: directId, username, displayName, alias: query }, listAuthorizedUserIds(config));
   return dedupe([
-    ...matchedChats.map((chat) => ({ recipientKind: "chat" as const, recipientId: chat.id, recipientLabel: chat.title || String(chat.id) })),
-    ...matchedUsers.map((user) => ({ recipientKind: "user" as const, recipientId: user.id, recipientLabel: userLabel(user) })),
-    ...(query && kind !== "groups" ? memoryUserCandidates(config, query) : []),
+    ...(kind === "users" ? [] : findFeishuChats(config, { id, query, title: input.title }).filter((chat) => chat.type !== "p2p").map((chat) => ({ recipientKind: "chat" as const, recipientId: chat.id, recipientLabel: chat.title || chat.id }))),
+    ...(kind === "groups" ? [] : findFeishuUsers(config, { id, query, displayName: input.displayName }).map((user) => ({ recipientKind: "user" as const, recipientId: user.id, recipientLabel: user.displayName }))),
   ]);
 }
 
-export function listMatchingTelegramRecipients(config: AppConfig, input: { query?: string; kind?: "groups" | "users" | "all" }): RecipientCandidate[] {
-  const query = cleanText(input.query);
-  if (!query) return listTelegramRecipients(config, input.kind || "groups");
-  return findTelegramRecipientCandidates(config, { query, kind: input.kind || "all" });
+export function listMatchingFeishuRecipients(config: AppConfig, input: { query?: string; kind?: "groups" | "users" | "all" }): RecipientCandidate[] {
+  return clean(input.query) ? findFeishuRecipientCandidates(config, { query: input.query, kind: input.kind || "all" }) : listFeishuRecipients(config, input.kind || "groups");
 }

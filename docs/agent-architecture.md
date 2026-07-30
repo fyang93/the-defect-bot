@@ -1,53 +1,47 @@
 # Agent architecture
 
-This project uses Pi SDK sessions directly.
+This project uses Pi SDK sessions directly and exposes them through a Feishu bot.
 
-## Workspace layout
+## Workspace
 
 ```text
 agent/
-  AGENTS.md                 # bot assistant context
-  .pi/                      # Pi config dir: settings, credentials, extensions, prompts, global skills
-  .agents/skills/           # project skills auto-discovered when cwd=agent
+  AGENTS.md
+  .pi/
+  .agents/skills/
 ```
-
-Use `just agent` to open an isolated interactive Pi session. It disables default context discovery and appends `agent/AGENTS.md` so the root development `AGENTS.md` is not loaded.
 
 ## Runtime lanes
 
-| Lane | Code path | Tools | Context files | Purpose |
-|---|---|---:|---:|---|
-| assistant | `AiService.runAssistantTurn` / scoped sessions | yes | `agent/AGENTS.md` only | User requests, state changes, memory/file/event/Telegram operations |
-| composer / writer | `ReplyComposer` via light writer sessions | no | no | Startup greeting, reminder wording, maintenance reports |
-| scheduled content | `generateScheduledTaskContent` | web allowlist only | no | Current-information automation content |
-| maintainer | `runMaintenancePass` | no | no | Short maintenance summaries and housekeeping text |
+| Lane | Code path | Tools | Purpose |
+|---|---|---:|---|
+| assistant | `AiService.runAssistantTurn` / scoped sessions | yes | User requests, memory, events, files, and Feishu delivery |
+| composer / writer | `ReplyComposer` | no | Reminder wording and small generated text |
+| scheduled content | `generateScheduledTaskContent` | web only | Current-information automation content |
+| maintainer | `runMaintenancePass` | no | Local memory housekeeping |
 
-The intended direction is to keep **assistant** as the only broad, state-changing agent lane. Composer and maintainer should stay small and avoid loading `agent/AGENTS.md` unless they explicitly need a broader capability.
+Every Feishu user has the same capability set. There is no role or authorization tier.
 
-## Pi tool boundary
+## Deterministic tool boundary
 
-The assistant should use these tools instead of raw shell commands for canonical bot state:
+- `event_*`: reminders, events, recurring schedules, and automations
+- `user_*`: aliases, person-memory links, timezones, and durable rules
+- `feishu_*`: recipient lookup, message delivery, and file delivery
 
-- `event:*`: reminders, events, recurring schedules, automations, pause/resume/delete
-- `user:*`: aliases, person memory links, identity links, timezones, durable assistant rules, pending auth
-- `telegram:*`: recipient listing/search, sends, file sends
+These tools call operations under `src/bot/operations/**`; canonical `system/` state is not mutated through shell commands.
 
-These tools call direct deterministic operations under `src/bot/operations/**`; no shell shim is used.
+## Feishu boundary
 
-## Resource loading and startup latency
+`src/bot/feishu/**` owns message normalization helpers, entity registries, uploads, and Feishu output. `src/bot/main.ts` owns the long-connection channel, `application.bot.menu_v6` custom-menu events, text commands, and model-card dispatch. Scheduled delivery reuses the connected channel.
 
-- The gateway caches Pi resource loaders by role/capability so `/new` sessions do not reload extensions and skills repeatedly.
-- Model registry refresh is cached briefly to avoid slow startup and repeated `/model` latency.
-- Writer/maintainer sessions use no-tools/no-context modes to avoid loading the full assistant workspace.
-- If a future composer mode needs web access, prefer enabling only web tools rather than enabling the full repository mutation toolset.
+Feishu `open_id` and `chat_id` values are strings throughout runtime and persisted JSON. Event target IDs are also strings.
 
-## Credentials and model config
+## Credentials
 
-Local-only files must not be committed:
+Do not commit local credentials or runtime Pi files:
 
+- `.env`
 - `agent/.pi/auth.json`
 - `agent/.pi/models.json`
 - `agent/.pi/sessions/`
 - `agent/.pi/npm/`
-
-The bot and `just agent` both use `agent/.pi` as the Pi agent directory; `agent/AGENTS.md` is the single bot-assistant context file.

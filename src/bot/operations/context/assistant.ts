@@ -4,17 +4,17 @@ import { getRecentClarification } from "bot/app/state";
 import { resolveChat, resolveUser } from "./store";
 
 type AssistantContextInput = {
-  requesterUserId?: number;
-  chatId?: number;
+  requesterUserId?: string;
+  chatId?: string;
   messageTime?: string;
 };
 
-export function lookupRequesterTimezone(config: AppConfig, requesterUserId: number | undefined): string | null {
+export function lookupRequesterTimezone(config: AppConfig, requesterUserId: string | undefined): string | null {
   if (requesterUserId == null) return config.bot.defaultTimezone || null;
   return resolveUser(config.paths.repoRoot, requesterUserId, { defaultTimezone: config.bot.defaultTimezone })?.timezone || config.bot.defaultTimezone || null;
 }
 
-function clarificationScopeKey(chatType: string | undefined, requesterUserId: number | undefined, chatId: number | undefined): string | undefined {
+function clarificationScopeKey(chatType: string | undefined, requesterUserId: string | undefined, chatId: string | undefined): string | undefined {
   if (chatType === "group" || chatType === "supergroup") return chatId != null ? `chat:${chatId}` : undefined;
   if (requesterUserId != null) return `user:${requesterUserId}`;
   return chatId != null ? `chat:${chatId}` : undefined;
@@ -48,7 +48,6 @@ export async function buildAssistantContextBlock(config: AppConfig, input: Assis
     turnTime,
     requesterUser: requesterUser && input.requesterUserId != null ? {
       id: String(input.requesterUserId),
-      username: requesterUser.username || null,
       displayName: requesterUser.displayName || null,
       personPath: requesterUser.personPath || null,
       timezone: requesterUser.timezone || effectiveTimezone || null,
@@ -66,7 +65,7 @@ export async function buildAssistantContextBlock(config: AppConfig, input: Assis
   const lines = [
     requesterUser?.personPath ? `Requester person path: ${requesterUser.personPath}` : "",
     requesterUser?.personPath ? "For requester-specific recorded facts or files, start from that path before saying nothing is recorded." : "",
-    requesterUser?.personPath ? "For vague alias requests, read that file and copy exact aliases/names/Telegram handles; never infer aliases from slugs, pinyin, usernames, or current display names." : "",
+    requesterUser?.personPath ? "For vague alias requests, read that file and copy exact aliases/names; never infer aliases from slugs or current display names." : "",
     "Assistant context JSON:",
     "```json",
     JSON.stringify(payload, null, 2),

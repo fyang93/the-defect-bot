@@ -5,19 +5,14 @@ import { loadConfig } from "./config";
 import { logger } from "./logger";
 
 export const DEFAULT_CONFIG_PATH = path.resolve(process.cwd(), "config.toml");
+export type ConfigReloadResult = { warnings: string[]; reloadedKeys: string[]; restartRequiredKeys: string[] };
 
-export type ConfigReloadResult = {
-  warnings: string[];
-  reloadedKeys: string[];
-  restartRequiredKeys: string[];
-};
-
-function diffConfigKeys(before: AppConfig, after: AppConfig): string[] {
+function changedKeys(before: AppConfig, after: AppConfig): string[] {
   const changed: string[] = [];
-  if (before.telegram.botToken !== after.telegram.botToken) changed.push("telegram.bot_token");
-  if (before.telegram.adminUserId !== after.telegram.adminUserId) changed.push("telegram.admin_user_id");
-  if (before.telegram.waitingMessage !== after.telegram.waitingMessage) changed.push("telegram.waiting_message");
-  if (before.telegram.menuPageSize !== after.telegram.menuPageSize) changed.push("telegram.menu_page_size");
+  if (before.feishu.appId !== after.feishu.appId) changed.push("feishu.app_id");
+  if (before.feishu.appSecret !== after.feishu.appSecret) changed.push("feishu.app_secret");
+  if (before.feishu.inputMergeWindowSeconds !== after.feishu.inputMergeWindowSeconds) changed.push("feishu.input_merge_window_seconds");
+  if (before.feishu.menuPageSize !== after.feishu.menuPageSize) changed.push("feishu.menu_page_size");
   if (before.bot.personaStyle !== after.bot.personaStyle) changed.push("bot.persona_style");
   if (before.bot.language !== after.bot.language) changed.push("bot.language");
   if (before.bot.defaultTimezone !== after.bot.defaultTimezone) changed.push("bot.default_timezone");
@@ -27,62 +22,25 @@ function diffConfigKeys(before: AppConfig, after: AppConfig): string[] {
 }
 
 export function applyReloadedConfig(target: AppConfig, next: AppConfig): ConfigReloadResult {
-  const warnings: string[] = [];
-  const requestedChanges = diffConfigKeys(target, next);
-  const restartRequiredKeys: string[] = [];
-
-  if (target.telegram.botToken !== next.telegram.botToken) {
-    warnings.push("telegram.bot_token changed but requires process restart; keeping the current runtime token");
-    restartRequiredKeys.push("telegram.bot_token");
-    next.telegram.botToken = target.telegram.botToken;
-  }
-  target.telegram = { ...next.telegram };
-  target.bot = { ...next.bot };
-  target.paths = { ...next.paths };
-  target.maintenance = { ...next.maintenance };
-
-  const reloadedKeys = requestedChanges.filter((key) => !restartRequiredKeys.includes(key));
-  return { warnings, reloadedKeys, restartRequiredKeys };
+  const requested = changedKeys(target, next);
+  const restartRequiredKeys: string[] = requested.filter((key) => key === "feishu.app_id" || key === "feishu.app_secret");
+  const warnings = restartRequiredKeys.length ? ["Feishu credentials changed and require a process restart; keeping current runtime credentials"] : [];
+  if (restartRequiredKeys.length) next.feishu = { ...next.feishu, appId: target.feishu.appId, appSecret: target.feishu.appSecret };
+  target.feishu = { ...next.feishu }; target.bot = { ...next.bot }; target.paths = { ...next.paths }; target.maintenance = { ...next.maintenance };
+  return { warnings, reloadedKeys: requested.filter((key) => !restartRequiredKeys.includes(key)), restartRequiredKeys };
 }
 
-export function startConfigWatcher(
-  configPath: string,
-  config: AppConfig,
-  onReload: (config: AppConfig, result: ConfigReloadResult) => Promise<void> | void,
-): FSWatcher {
-  const dir = path.dirname(configPath);
-  const basename = path.basename(configPath);
-  let timer: NodeJS.Timeout | null = null;
-  let reloading = false;
-
-  const scheduleReload = () => {
+export function startConfigWatcher(configPath: string, config: AppConfig, onReload: (config: AppConfig, result: ConfigReloadResult) => Promise<void> | void): FSWatcher {
+  let timer: NodeJS.Timeout | undefined;
+  return watch(path.dirname(configPath), (_event, filename) => {
+    if (filename && filename.toString() !== path.basename(configPath)) return;
     if (timer) clearTimeout(timer);
     timer = setTimeout(async () => {
-      if (reloading) return;
-      reloading = true;
       try {
-        const next = loadConfig(configPath);
-        const result = applyReloadedConfig(config, next);
-        await logger.info(`reloaded config from ${configPath}`);
-        for (const warning of result.warnings) {
-          await logger.warn(`config reload warning: ${warning}`);
-        }
+        const result = applyReloadedConfig(config, loadConfig(configPath));
         await onReload(config, result);
-      } catch (error) {
-        await logger.warn(`config reload failed: ${error instanceof Error ? error.message : String(error)}`);
-      } finally {
-        reloading = false;
-      }
+        await logger.info(`reloaded config from ${configPath}`);
+      } catch (error) { await logger.warn(`config reload failed: ${error instanceof Error ? error.message : String(error)}`); }
     }, 250);
-  };
-
-  return watch(dir, (_eventType, filename) => {
-    if (!filename) {
-      scheduleReload();
-      return;
-    }
-    if (filename.toString() === basename) {
-      scheduleReload();
-    }
   });
 }

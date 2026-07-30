@@ -1,6 +1,6 @@
 import { watch, type FSWatcher } from "node:fs";
 import path from "node:path";
-import type { Bot, Context } from "grammy";
+import type { LarkChannel } from "@larksuiteoapi/node-sdk";
 import type { AppConfig } from "bot/app/types";
 import { logger } from "bot/app/logger";
 import type { EventRecord, ReminderInstance } from "./types";
@@ -77,7 +77,7 @@ export class ScheduleCoordinator implements ScheduleLoopHandle {
 
   constructor(
     private readonly config: AppConfig,
-    private readonly bot: Bot<Context>,
+    private readonly bot: LarkChannel,
     private readonly hooks: ScheduleCoordinatorHooks = {},
   ) {}
 
@@ -205,7 +205,7 @@ export class ScheduleCoordinator implements ScheduleLoopHandle {
 
 export async function startScheduleLoop(
   config: AppConfig,
-  bot: Bot<Context>,
+  bot: LarkChannel,
   hooks: ScheduleCoordinatorHooks = {},
 ): Promise<ScheduleLoopHandle> {
   const coordinator = new ScheduleCoordinator(config, bot, hooks);

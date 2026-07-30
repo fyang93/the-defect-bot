@@ -49,7 +49,7 @@ export type EventTimeSemantics = "absolute" | "local";
 
 export type EventTarget = {
   targetKind: "user" | "chat";
-  targetId: number;
+  targetId: string;
 };
 
 export type EventRecord = {
@@ -57,7 +57,7 @@ export type EventRecord = {
   title: string;
   note?: string;
   timeSemantics: EventTimeSemantics;
-  createdByUserId?: number;
+  createdByUserId?: string;
   schedule: EventSchedule;
   reminders: Reminder[];
   category?: "routine" | "special" | "automation";

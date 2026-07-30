@@ -1,132 +1,29 @@
-import { Bot } from "grammy";
+import type { LarkChannel } from "@larksuiteoapi/node-sdk";
 import type { AppConfig } from "bot/app/types";
 import { logger } from "bot/app/logger";
-import { currentModel, persistState, state } from "bot/app/state";
+import { persistState, state } from "bot/app/state";
 import type { AiService } from "bot/ai";
 import { ScheduleEngine, resolveScheduleDisplayTimezone, scheduledTaskPromptForEvent, scheduleEventScheduleSummary, shouldGenerateScheduledTaskOnDelivery } from "bot/operations/events";
-import { createMaintainerRunner } from "bot/runtime";
+import { createMaintainerRunner } from "bot/runtime/maintainer";
 import type { ConversationController } from "bot/runtime/conversations/controller";
-import { sendMessageFormatted } from "bot/telegram/format";
-import { buildProviderKeyboard, buildProviderModelKeyboard, providersFromModels, resolveDisplayedModel } from "bot/telegram/model-selection/menu";
-import { tForUser, userLocale } from "bot/app/i18n";
 
-export function createBotLifecycle(input: {
-  config: AppConfig;
-  bot: Bot;
-  agentService: AiService;
-  scheduleEngine: ScheduleEngine;
-  conversationController: ConversationController;
-}) {
-  const { config, bot, agentService, scheduleEngine, conversationController } = input;
-
-  async function sendAdminMessage(text: string): Promise<void> {
-    const adminUserId = config.telegram.adminUserId;
-    if (!adminUserId) return;
-    await logger.info(`sending admin message length=${text.trim().length}`);
-    await sendMessageFormatted(bot, adminUserId, text);
-  }
-
+export function createBotLifecycle(input: { config: AppConfig; channel: LarkChannel; agentService: AiService; scheduleEngine: ScheduleEngine; conversationController: ConversationController }) {
+  const { config, channel, agentService, scheduleEngine, conversationController } = input;
   async function ensureUsableStartupModel(): Promise<void> {
     if (!state.model) return;
-    try {
-      const { models } = await agentService.listModels();
-      if (models.includes(state.model)) return;
-      await logger.warn(`configured model ${state.model} is unavailable; falling back to the default Pi SDK model`);
-      state.model = null;
-      await persistState(config.paths.stateFile);
-    } catch (error) {
-      await logger.warn(`failed to validate configured model at startup: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    try { const { models } = await agentService.listModels(); if (!models.includes(state.model)) { state.model = null; await persistState(config.paths.stateFile); } }
+    catch (error) { await logger.warn(`failed to validate startup model: ${error instanceof Error ? error.message : String(error)}`); }
   }
-
-  async function warmAssistantResources(): Promise<void> {
-    try {
-      await logger.info("startup phase: warm assistant resources");
-      await agentService.warmAssistantResources();
-    } catch (error) {
-      await logger.warn(`failed to warm assistant resources: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  async function sendStartupGreeting(): Promise<void> {
-    try {
-      const adminUserId = config.telegram.adminUserId;
-      if (!adminUserId) {
-        await logger.warn("telegram.admin_user_id is not configured; skipping startup greeting");
-        return;
-      }
-      const greeting = await agentService.generateStartupGreeting({ requesterUserId: adminUserId, preferredLanguage: userLocale(config, adminUserId) });
-      if (!greeting) {
-        await logger.warn("startup greeting returned empty output; skipping greet");
-        return;
-      }
-      await sendAdminMessage(greeting);
-      await logger.info("Sent startup greeting to admin_user_id only");
-    } catch (error) {
-      await logger.warn(`failed to send startup greeting: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  function createMaintainerRunnerWithNotifications() {
-    return createMaintainerRunner(config, agentService, {
-      isBusy: () => conversationController.hasActiveTask(),
-      onChange: async (summary) => {
-        await sendAdminMessage(summary);
-      },
-    });
-  }
-
-  async function openModelPicker(ctx: any): Promise<void> {
-    const { defaults, models } = await agentService.listModels();
-    const activeModel = resolveDisplayedModel(state.model, defaults, currentModel());
-    const providers = providersFromModels(models);
-    const activeProvider = activeModel.split("/", 1)[0] || providers[0];
-    if (providers.length === 1 || providers.includes(activeProvider)) {
-      await ctx.reply(tForUser(config, ctx.from?.id, "choose_model_under_provider", { provider: activeProvider }), {
-        reply_markup: buildProviderModelKeyboard(activeProvider, models, activeModel, config.telegram.menuPageSize, tForUser(config, ctx.from?.id, "ui_back"), 0),
-      });
-      return;
-    }
-    await ctx.reply(tForUser(config, ctx.from?.id, "choose_provider"), {
-      reply_markup: buildProviderKeyboard(models, activeModel, config.telegram.menuPageSize, tForUser(config, ctx.from?.id, "ui_back"), 0),
-    });
-  }
-
+  async function warmAssistantResources(): Promise<void> { try { await agentService.warmAssistantResources(); } catch (error) { await logger.warn(`failed to warm assistant resources: ${error instanceof Error ? error.message : String(error)}`); } }
+  function createMaintainerRunnerWithoutNotifications() { return createMaintainerRunner(config, agentService, { isBusy: () => conversationController.hasActiveTask() }); }
   async function startScheduleLoop() {
-    return scheduleEngine.startLoop(bot as any, {
-      renderMessage: async (event, instance, fallback) => {
-        if (shouldGenerateScheduledTaskOnDelivery(event)) {
-          const prompt = scheduledTaskPromptForEvent(event).trim();
-          if (!prompt) return fallback;
-          const generated = await agentService.generateScheduledTaskContent(prompt);
-          return generated.trim() || fallback;
-        }
-
-        const generated = await agentService.generateReminderText(
-          event.title,
-          instance.notifyAt,
-          scheduleEventScheduleSummary(config, event),
-          resolveScheduleDisplayTimezone(config, event),
-          {
-            eventScheduledAt: event.deliveryState?.currentOccurrence?.scheduledAt,
-            reminderLabel: instance.label,
-            reminderOffsetMinutes: instance.offsetMinutes,
-            specialKind: event.specialKind,
-            category: event.category,
-          },
-        );
-        return generated.trim() || fallback;
-      },
-    });
+    return scheduleEngine.startLoop(channel, { renderMessage: async (event, instance, fallback) => {
+      if (shouldGenerateScheduledTaskOnDelivery(event)) {
+        const prompt = scheduledTaskPromptForEvent(event).trim();
+        return prompt ? (await agentService.generateScheduledTaskContent(prompt)).trim() || fallback : fallback;
+      }
+      return (await agentService.generateReminderText(event.title, instance.notifyAt, scheduleEventScheduleSummary(config, event), resolveScheduleDisplayTimezone(config, event), { eventScheduledAt: event.deliveryState?.currentOccurrence?.scheduledAt, reminderLabel: instance.label, reminderOffsetMinutes: instance.offsetMinutes, specialKind: event.specialKind, category: event.category })).trim() || fallback;
+    } });
   }
-
-  return {
-    sendAdminMessage,
-    ensureUsableStartupModel,
-    warmAssistantResources,
-    sendStartupGreeting,
-    createMaintainerRunnerWithNotifications,
-    openModelPicker,
-    startScheduleLoop,
-  };
+  return { ensureUsableStartupModel, warmAssistantResources, createMaintainerRunnerWithoutNotifications, startScheduleLoop };
 }

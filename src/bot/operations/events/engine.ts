@@ -1,4 +1,4 @@
-import type { Bot, Context } from "grammy";
+import type { LarkChannel } from "@larksuiteoapi/node-sdk";
 import type { AppConfig } from "bot/app/types";
 import { logger } from "bot/app/logger";
 import type { AiService } from "bot/ai";
@@ -46,11 +46,11 @@ export class ScheduleEngine {
     return { changed: true };
   }
 
-  async deliver(bot: Bot<Context>, hooks?: ScheduleEngineDeliverHooks): Promise<number> {
+  async deliver(bot: LarkChannel, hooks?: ScheduleEngineDeliverHooks): Promise<number> {
     return deliverDueSchedules(this.config, bot, hooks?.renderMessage, hooks?.afterDelivery);
   }
 
-  async startLoop(bot: Bot<Context>, hooks?: ScheduleEngineDeliverHooks): Promise<ScheduleLoopHandle> {
+  async startLoop(bot: LarkChannel, hooks?: ScheduleEngineDeliverHooks): Promise<ScheduleLoopHandle> {
     this.scheduleLoop = await startScheduleLoop(this.config, bot, {
       renderMessage: hooks?.renderMessage,
       afterDelivery: hooks?.afterDelivery,

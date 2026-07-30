@@ -1,7 +1,5 @@
 import { formatIsoInTimezoneLocalString } from "bot/app/time";
 import type { AppConfig } from "bot/app/types";
-import { accessLevelForUser } from "bot/operations/access/roles";
-import { canManageAllSchedules, canManageOwnSchedules, canRequesterCreateEventTargets, canReadSchedules } from "bot/operations/access/control";
 import { buildEventScheduleFromExternal } from "./schedule_parser";
 import { buildScheduledTaskPrompt } from "./automation";
 import { createEventRecordWithDefaults, deleteEventRecord, getCurrentOccurrence, readEventRecords, resolveScheduleDisplayTimezone, resolveScheduleTimezone, updateEventRecord } from ".";
@@ -19,9 +17,9 @@ export type TaskRecord = {
   };
   payload: Record<string, unknown>;
   source?: {
-    requesterUserId?: number;
-    chatId?: number;
-    messageId?: number;
+    requesterUserId?: string;
+    chatId?: string;
+    messageId?: string;
   };
   createdAt: string;
   updatedAt: string;
@@ -63,31 +61,27 @@ function extractLocalScheduledAt(event: EventRecord, fallbackTimezone: string): 
 
 function normalizeEventTargets(raw: unknown): EventTarget[] {
   return Array.isArray(raw)
-    ? raw.filter((target): target is EventTarget => Boolean(target) && typeof target === "object" && ((target as EventTarget).targetKind === "user" || (target as EventTarget).targetKind === "chat") && Number.isInteger((target as EventTarget).targetId))
+    ? raw.filter((target): target is EventTarget => Boolean(target) && typeof target === "object" && ((target as EventTarget).targetKind === "user" || (target as EventTarget).targetKind === "chat") && typeof (target as EventTarget).targetId === "string" && Boolean((target as EventTarget).targetId))
     : [];
 }
 
 function scheduleTargetsFromPayload(task: TaskRecord): EventTarget[] {
   const payloadTargets = normalizeEventTargets(task.payload.targets);
   if (payloadTargets.length > 0) return payloadTargets;
-  if (Number.isInteger(task.source?.requesterUserId)) {
-    return [{ targetKind: "user", targetId: Number(task.source?.requesterUserId) }];
-  }
-  if (Number.isInteger(task.source?.chatId)) {
-    return [{ targetKind: "chat", targetId: Number(task.source?.chatId) }];
-  }
+  if (task.source?.requesterUserId) return [{ targetKind: "user", targetId: task.source.requesterUserId }];
+  if (task.source?.chatId) return [{ targetKind: "chat", targetId: task.source.chatId }];
   return [];
 }
 
 function scheduleTargetsFromUpdateChanges(changes: Record<string, unknown>): EventTarget[] | undefined {
   const explicitTargets = normalizeEventTargets(changes.targets);
   if (explicitTargets.length > 0) return explicitTargets;
-  const targetUserId = Number.isInteger(changes.targetUserId) ? Number(changes.targetUserId) : undefined;
-  if (typeof targetUserId === "number") {
+  const targetUserId = typeof changes.targetUserId === "string" && changes.targetUserId ? changes.targetUserId : undefined;
+  if (targetUserId) {
     return [{ targetKind: "user", targetId: targetUserId }];
   }
-  const targetChatId = Number.isInteger(changes.targetChatId) ? Number(changes.targetChatId) : undefined;
-  if (typeof targetChatId === "number") {
+  const targetChatId = typeof changes.targetChatId === "string" && changes.targetChatId ? changes.targetChatId : undefined;
+  if (targetChatId) {
     return [{ targetKind: "chat", targetId: targetChatId }];
   }
   return undefined;
@@ -139,7 +133,7 @@ export async function resolveEventsByMatch(
   config: AppConfig,
   input: {
     match?: Record<string, unknown>;
-    requesterUserId?: number;
+    requesterUserId?: string;
     allowedStatuses?: EventRecord["status"][];
   },
 ): Promise<{ mode: "single" | "batch"; events: EventRecord[]; reason?: string }> {
@@ -147,28 +141,15 @@ export async function resolveEventsByMatch(
     ? input.match
     : {};
   const allowedStatuses = input.allowedStatuses || ["active"];
-  const requesterUserId = input.requesterUserId;
-  const accessLevel = accessLevelForUser(config, requesterUserId);
-  if (!canReadSchedules(accessLevel)) {
-    return { mode: "single", events: [], reason: "schedule-read-not-allowed" };
-  }
-
   const allEvents = (await readEventRecords(config)).filter((event) => allowedStatuses.includes(event.status));
-  const matchedEvents = allEvents.filter((event) => {
-    if (canManageAllSchedules(accessLevel)) return eventMatchesFilters(event, match, config.bot.defaultTimezone);
-    if (!canManageOwnSchedules(accessLevel)) return false;
-    if (requesterUserId && event.createdByUserId !== requesterUserId) return false;
-    return eventMatchesFilters(event, match, config.bot.defaultTimezone);
-  });
+  const matchedEvents = allEvents.filter((event) => eventMatchesFilters(event, match, config.bot.defaultTimezone));
 
   const batchIds = explicitEventIds(match);
   if (batchIds.length > 0) {
     const byId = new Map(allEvents.map((event) => [event.id, event]));
     const resolved = batchIds.map((id) => byId.get(id)).filter((event): event is EventRecord => Boolean(event));
     if (resolved.length !== batchIds.length) return { mode: "batch", events: [], reason: "schedule-batch-not-resolved" };
-    const permitted = resolved.filter((event) => canManageAllSchedules(accessLevel) || (canManageOwnSchedules(accessLevel) && requesterUserId && event.createdByUserId === requesterUserId));
-    if (permitted.length !== resolved.length) return { mode: "batch", events: [], reason: "schedule-batch-not-resolved" };
-    return { mode: "batch", events: permitted };
+    return { mode: "batch", events: resolved };
   }
 
   if (matchedEvents.length === 1) return { mode: "single", events: [matchedEvents[0]] };
@@ -203,7 +184,6 @@ export async function runEventTask(config: AppConfig, task: TaskRecord): Promise
       ? payload.reminders.filter((item): item is Reminder => Boolean(item) && typeof item === "object" && typeof (item as Reminder).id === "string" && Number.isInteger((item as Reminder).offsetMinutes))
       : undefined;
     if (!title || !schedule || targets.length === 0) return { skipped: true, reason: "invalid-create-payload" };
-    if (!canRequesterCreateEventTargets(config, task.source?.requesterUserId, targets)) return { skipped: true, reason: "schedule-create-not-allowed" };
     const specialKind = payload.specialKind === "birthday" || payload.specialKind === "festival" || payload.specialKind === "anniversary" || payload.specialKind === "memorial"
       ? payload.specialKind
       : undefined;
@@ -285,9 +265,6 @@ export async function runEventTask(config: AppConfig, task: TaskRecord): Promise
 
       const updatedTargets = scheduleTargetsFromUpdateChanges(changes);
       if (updatedTargets && updatedTargets.length > 0) {
-        if (!canRequesterCreateEventTargets(config, task.source?.requesterUserId, updatedTargets)) {
-          return { skipped: true, reason: "schedule-create-not-allowed" };
-        }
         event.targets = updatedTargets;
       }
 

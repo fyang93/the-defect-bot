@@ -1,10 +1,7 @@
 export type AppConfig = {
-  telegram: {
-    botToken: string;
-    adminUserId: number | null;
-    waitingMessage: string;
-    waitingMessages?: string[];
-    waitingMessageRotationSeconds?: number;
+  feishu: {
+    appId: string;
+    appSecret: string;
     inputMergeWindowSeconds: number;
     menuPageSize: number;
   };
@@ -34,9 +31,7 @@ export type UploadedFile = {
   filename: string;
   mimeType: string;
   sizeBytes: number;
-  source: "document" | "photo" | "voice" | "audio" | "video";
-  audioTitle?: string;
-  audioPerformer?: string;
+  source: "file" | "image" | "audio" | "video";
   durationSeconds?: number;
 };
 
@@ -46,24 +41,13 @@ export type AiAttachment = {
   url: string;
 };
 
-export type PendingAuthorization = {
-  kind: "allowed";
-  username: string;
-  createdBy: number;
-  createdAt: string;
-  expiresAt: string;
-};
-
 export type SessionState = {
   model: string | null;
   lastActivityAt: string | null;
   lastMaintainedAt: string | null;
   recentUploadsByScope: Record<string, { files: UploadedFile[]; recentUploadsAt: string | null }>;
   recentClarificationsByScope: Record<string, { requestText: string; clarificationMessage: string; updatedAt: string }>;
-  // Runtime caches hydrated from canonical system registries and refreshed during execution.
-  // These improve hot-path reads but are not the source of truth.
   userTimezoneCache: Record<string, { timezone: string; updatedAt: string }>;
-  telegramUserCache: Record<string, { username?: string; firstName?: string; lastName?: string; displayName: string; lastSeenAt: string; languageCode?: string }>;
-  telegramChatCache: Record<string, { type: string; title?: string; lastSeenAt: string }>;
-  pendingAuthorizations: PendingAuthorization[];
+  feishuUserCache: Record<string, { displayName: string; lastSeenAt: string }>;
+  feishuChatCache: Record<string, { type: "p2p" | "group" | "topic"; title?: string; lastSeenAt: string }>;
 };

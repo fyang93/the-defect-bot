@@ -21,6 +21,18 @@ export function extractAssistantText(message: unknown): string {
   return extractText(message);
 }
 
+export function assistantErrorFromMessages(messages: unknown[]): string | null {
+  for (const message of [...messages].reverse()) {
+    if (!message || typeof message !== "object") continue;
+    const record = message as Record<string, unknown>;
+    if (record.role !== "assistant" || record.stopReason !== "error") continue;
+    return typeof record.errorMessage === "string" && record.errorMessage.trim()
+      ? record.errorMessage.trim()
+      : "Pi model request failed without an error message.";
+  }
+  return null;
+}
+
 export function summarizeExecutionParts(parts: unknown): ExecutionSummary[] {
   if (!Array.isArray(parts)) return [];
   return parts.flatMap((part) => {

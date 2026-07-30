@@ -24,4 +24,4 @@ Rules:
 - If web access is enabled, use it only when the task needs current external information.
 - For reminder text, anchor time wording to the scheduled delivery/event context, not generation time.
 - For startup greetings, keep it short and do not mention time/date unless explicitly requested.
-- For maintenance reports, summarize only confirmed maintenance facts for the administrator; do not rewrite general assistant replies.
+- For maintenance reports, summarize only confirmed maintenance facts; do not rewrite general assistant replies.

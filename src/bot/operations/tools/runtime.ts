@@ -1,22 +1,15 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "bot/app/config";
-import { loadPersistentState, persistState, rememberPendingAuthorization, state } from "bot/app/state";
-import { ensureAdminUserAccessLevel, resolveStoredUserId } from "bot/operations/access/roles";
-import { hasUserAccessLevel } from "bot/operations/access/control";
-import { invalidateContextStoreCache } from "bot/operations/context/store";
+import { loadPersistentState } from "bot/app/state";
+import { migrateSystemStateForFeishu } from "bot/app/migrate";
+import { invalidateContextStoreCache, resolveUserByAlias, resolveUserByDisplayName } from "bot/operations/context/store";
 import type { AppConfig } from "bot/app/types";
 import { AiService } from "bot/ai";
 import { ScheduleEngine } from "bot/operations/events";
 
 export type ToolArgs = Record<string, unknown>;
-
-export class ToolOutput extends Error {
-  constructor(readonly value: unknown) {
-    super("tool-output");
-  }
-}
-
+export class ToolOutput extends Error { constructor(readonly value: unknown) { super("tool-output"); } }
 export type ToolContext = {
   config: AppConfig;
   args: ToolArgs;
@@ -26,17 +19,9 @@ export type ToolContext = {
   readJson: <T>(relativePath: string, fallback: T) => T;
   writeJson: (relativePath: string, value: unknown) => void;
   cleanText: (value: unknown) => string | undefined;
-  asInt: (value: unknown) => number | undefined;
+  asId: (value: unknown) => string | undefined;
   parseObjectArg: (value: unknown) => Record<string, unknown> | undefined;
-  requireAdminRequester: () => number;
-  requireTrustedRequester: () => number;
-  resolveUserLookup: () => {
-    userId?: number;
-    username?: string;
-    displayName?: string;
-    alias?: string;
-    resolvedUserId?: number | null;
-  };
+  resolveUserLookup: () => { userId?: string; displayName?: string; alias?: string; resolvedUserId?: string };
   usersDoc: () => { users: Record<string, Record<string, unknown>> };
   logTextContent: (text: string) => string;
   logInfo: (message: string) => void;
@@ -44,171 +29,51 @@ export type ToolContext = {
   logError: (message: string) => void;
 };
 
-export function nowIso(): string {
-  return new Date().toISOString();
+export function nowIso(): string { return new Date().toISOString(); }
+export function cleanText(value: unknown): string | undefined { return typeof value === "string" && value.trim() ? value.trim() : undefined; }
+export function asId(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return undefined;
 }
-
-export function cleanText(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-export function asInt(value: unknown): number | undefined {
-  const n = Number(value);
-  return Number.isInteger(n) ? n : undefined;
-}
-
-export function asPositiveNumber(value: unknown): number | undefined {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? n : undefined;
-}
-
 export function parseObjectArg(value: unknown): Record<string, unknown> | undefined {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
   if (typeof value !== "string" || !value.trim()) return undefined;
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
-  } catch {
-    return undefined;
-  }
+  try { const parsed = JSON.parse(value); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined; } catch { return undefined; }
 }
-
-export function logTextContent(text: string): string {
-  const trimmed = text.trim();
-  if (trimmed.length <= 500) return JSON.stringify(trimmed);
-  return `${JSON.stringify(trimmed.slice(0, 500))}...[truncated chars=${trimmed.length}]`;
-}
-
-export function summarizeArgsForLog(value: unknown): string {
-  try {
-    const json = JSON.stringify(value);
-    if (!json) return "{}";
-    return json.length <= 800 ? json : `${json.slice(0, 800)}...[truncated chars=${json.length}]`;
-  } catch {
-    return "[unserializable-args]";
-  }
-}
-
+export function logTextContent(text: string): string { return text.trim().length <= 500 ? JSON.stringify(text.trim()) : `${JSON.stringify(text.trim().slice(0, 500))}...[truncated chars=${text.trim().length}]`; }
+export function summarizeArgsForLog(value: unknown): string { try { const json = JSON.stringify(value) || "{}"; return json.length <= 800 ? json : `${json.slice(0, 800)}...[truncated chars=${json.length}]`; } catch { return "[unserializable-args]"; } }
 export function appendToolLogLine(config: AppConfig, level: "INFO" | "WARN" | "ERROR", message: string): void {
-  const line = `[${new Date().toISOString()}] [${level}] ${message}\n`;
-  try {
-    mkdirSync(path.dirname(config.paths.logFile), { recursive: true });
-    appendFileSync(config.paths.logFile, line, "utf8");
-  } catch {
-    // ignore file logging failures
-  }
+  try { mkdirSync(path.dirname(config.paths.logFile), { recursive: true }); appendFileSync(config.paths.logFile, `[${new Date().toISOString()}] [${level}] ${message}\n`, "utf8"); } catch { /* ignore */ }
 }
-
 export function emitToolTerminalLine(config: AppConfig, level: "INFO" | "WARN" | "ERROR", message: string): void {
-  const line = `[bot-tool] ${message}`;
-  try {
-    process.stderr.write(`${line}\n`);
-  } catch {
-    // ignore terminal logging failures
-  }
+  try { process.stderr.write(`[bot-tool] ${message}\n`); } catch { /* ignore */ }
   appendToolLogLine(config, level, `tool operation terminal ${message}`);
 }
 
 export async function initializeToolContext(args: ToolArgs, configPath?: string): Promise<ToolContext> {
   const config = loadConfig(configPath);
+  await migrateSystemStateForFeishu(config);
   await loadPersistentState(config.paths.stateFile);
-  await ensureAdminUserAccessLevel(config);
-  const scheduleEngine = new ScheduleEngine(config, new AiService(config));
-
-  const output = (value: unknown): never => {
-    throw new ToolOutput(value);
-  };
-
-  const readJson = <T>(relativePath: string, fallback: T): T => {
-    const filePath = path.join(config.paths.repoRoot, relativePath);
-    try {
-      return JSON.parse(readFileSync(filePath, "utf8")) as T;
-    } catch {
-      return fallback;
-    }
-  };
-
+  const output = (value: unknown): never => { throw new ToolOutput(value); };
+  const readJson = <T>(relativePath: string, fallback: T): T => { try { return JSON.parse(readFileSync(path.join(config.paths.repoRoot, relativePath), "utf8")) as T; } catch { return fallback; } };
   const writeJson = (relativePath: string, value: unknown): void => {
     const filePath = path.join(config.paths.repoRoot, relativePath);
     mkdirSync(path.dirname(filePath), { recursive: true });
     writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
     invalidateContextStoreCache(filePath);
   };
-
-  const usersDoc = (): { users: Record<string, Record<string, unknown>> } => {
-    const parsed = readJson<{ users?: Record<string, Record<string, unknown>> }>("system/users.json", { users: {} });
-    return { users: parsed.users && typeof parsed.users === "object" ? parsed.users : {} };
-  };
-
-  const requireAdminRequester = (): number => {
-    const requesterUserId = asInt(args.requesterUserId);
-    if (!requesterUserId || !hasUserAccessLevel(config, requesterUserId, "admin")) output({ ok: false, error: "admin-only-operation" });
-    return requesterUserId as number;
-  };
-
-  const requireTrustedRequester = (): number => {
-    const requesterUserId = asInt(args.requesterUserId);
-    if (!requesterUserId || !hasUserAccessLevel(config, requesterUserId, "trusted")) output({ ok: false, error: "trusted-operation-required" });
-    return requesterUserId as number;
-  };
-
+  const usersDoc = () => { const parsed = readJson<{ users?: Record<string, Record<string, unknown>> }>("system/users.json", { users: {} }); return { users: parsed.users && typeof parsed.users === "object" ? parsed.users : {} }; };
   const resolveUserLookup = () => {
-    const userId = asInt(args.userId);
-    const username = cleanText(args.username);
+    const userId = asId(args.userId);
     const displayName = cleanText(args.displayName);
     const alias = cleanText(args.alias) || cleanText(args.query);
-    const resolvedUserId = resolveStoredUserId(config, { userId, username, displayName, alias });
-    return { userId, username, displayName, alias, resolvedUserId };
+    const resolvedUserId = userId || resolveUserByAlias(config.paths.repoRoot, alias)?.[0] || resolveUserByDisplayName(config.paths.repoRoot, displayName)?.[0];
+    return { userId, displayName, alias, resolvedUserId };
   };
-
-  return {
-    config,
-    args,
-    scheduleEngine,
-    output,
-    nowIso,
-    readJson,
-    writeJson,
-    cleanText,
-    asInt,
-    parseObjectArg,
-    requireAdminRequester,
-    requireTrustedRequester,
-    resolveUserLookup,
-    usersDoc,
-    logTextContent,
-    logInfo: (message: string) => emitToolTerminalLine(config, "INFO", message),
-    logWarn: (message: string) => emitToolTerminalLine(config, "WARN", message),
-    logError: (message: string) => emitToolTerminalLine(config, "ERROR", message),
-  };
-}
-
-function resolvePendingAuthorizationExpiresAt(args: ToolArgs, now = Date.now()): string | null {
-  const explicitExpiresAt = cleanText(args.expiresAt);
-  if (explicitExpiresAt) {
-    const parsed = Date.parse(explicitExpiresAt);
-    if (!Number.isFinite(parsed) || parsed <= now) return null;
-    return new Date(parsed).toISOString();
-  }
-
-  const durationMinutes = asPositiveNumber(args.durationMinutes);
-  if (durationMinutes) return new Date(now + durationMinutes * 60 * 1000).toISOString();
-
-  return new Date(now + 24 * 60 * 60 * 1000).toISOString();
-}
-
-export async function addPendingAuthorization(context: ToolContext): Promise<void> {
-  const { args, output, requireAdminRequester, cleanText, asInt, nowIso, config } = context;
-  requireAdminRequester();
-  const username = cleanText(args.username);
-  context.logInfo(`auth_add_pending: creating pending authorization for ${username || "unknown"}`);
-  const createdBy = asInt(args.createdBy);
-  const expiresAt = resolvePendingAuthorizationExpiresAt(args);
-  if (!username || !createdBy) output({ ok: false, error: "missing-username-or-createdBy" });
-  if (!expiresAt) output({ ok: false, error: "invalid-expiresAt" });
-  rememberPendingAuthorization({ kind: "allowed", username: username as string, createdBy: createdBy as number, createdAt: nowIso(), expiresAt: expiresAt as string });
-  await persistState(config.paths.stateFile);
-  output({ ok: true, pendingAuthorizations: state.pendingAuthorizations, expiresAt });
+  const scheduleEngine = new ScheduleEngine(config, new AiService(config));
+  return { config, args, scheduleEngine, output, nowIso, readJson, writeJson, cleanText, asId, parseObjectArg, resolveUserLookup, usersDoc, logTextContent,
+    logInfo: (message) => emitToolTerminalLine(config, "INFO", message), logWarn: (message) => emitToolTerminalLine(config, "WARN", message), logError: (message) => emitToolTerminalLine(config, "ERROR", message) };
 }
 
 export async function logToolInvocation(config: AppConfig, command: string, rawDomain: string, args: ToolArgs): Promise<void> {

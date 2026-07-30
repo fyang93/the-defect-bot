@@ -1,78 +1,40 @@
-# 故障机器人
+# The Defect Bot
 
-[English README](README.md)
-
-一个本地优先的 Telegram bot，用于个人记忆、文件、日程、提醒、自动化和轻量消息转达。
-
-它通过 Pi SDK 提供 assistant 能力，把长期状态保存在本地仓库文件中，并把 Telegram 当作聊天入口，而不是事实来源。
+一个由 Pi SDK 驱动的本地优先飞书机器人，用于个人记忆、文件、日程、提醒、自动化和消息转达。
 
 ## 功能
 
-- 记住并查询个人事实信息
-- 整理 Telegram 上传的文件，供本地处理
-- 创建提醒、日程、周期任务和自动化
-- 向已授权用户或已知群聊即时 / 定时发送消息
-- 通过 bot 管理用户访问级别
+- 飞书私聊直接响应；群聊中被 @ 时响应
+- 支持文字、图片、文档、音频和视频
+- 用本地 `system/` JSON 保存用户、群聊、事件和运行状态
+- 用 `memory/` 保存长期记忆
+- 所有飞书用户能力相同：都可以管理记忆、文件、日程、模型和消息转达
+- 支持 `/help`、`/new`、`/stop`、`/quota`、`/reminders`、`/model`
+- 支持“新建会话”“剩余额度”“当前提醒”“切换模型”飞书自定义菜单
 
-## 快速开始
+## 启动
 
 ```bash
-cp config.toml.example config.toml
 just install
-# 配置 Telegram 和 Pi 模型凭证后：
+cp config.toml.example config.toml
+# 在 .env 中配置 FEISHU_APP_ID 和 FEISHU_APP_SECRET
+just agent  # 如果 agent/.pi/auth.json 尚无可用凭证，先执行一次 /login
 just serve
 ```
 
-Pi 模型凭证可以放在 `agent/.pi/auth.json`、`agent/.pi/models.json`，或使用支持的环境变量。
-
-本地调试 assistant：
-
-```bash
-just agent
-```
+飞书应用需要启用机器人能力和长连接事件订阅，并订阅消息接收事件及 `application.bot.menu_v6`。按需授予消息读取、发送、文件资源读取和消息表情回应权限。事件型自定义菜单可分别使用 `new_session`、`remaining_quota`、`current_reminders`、`switch_model` 作为事件键；发送同名中文文本的菜单也受支持。
 
 ## 配置
 
-至少填写：
+```toml
+[feishu]
+app_id = "${FEISHU_APP_ID}"
+app_secret = "${FEISHU_APP_SECRET}"
+input_merge_window_seconds = 3
+menu_page_size = 8
+```
 
-- `telegram.bot_token`
-- `telegram.admin_user_id`
-- `bot.default_timezone`
-
-常用选项：
-
-- `telegram.waiting_message`：初始等待文案；留空则不显示
-- `telegram.input_merge_window_seconds`：短时间内追加文本 / 文件的合并窗口
-- `telegram.menu_page_size`：Telegram 内联菜单分页大小
-- `bot.language`：固定 UI 语言，`zh-CN` 或 `en`
-- `bot.persona_style`：assistant 人设提示
-- `maintenance.enabled`：是否启用空闲维护
-
-## Telegram 设置
-
-- 需要接收 bot 私聊消息的用户，必须先主动和 bot 私聊一次。
-- 如果要在群里使用 bot，需要在 BotFather 里关闭该 bot 的 **Group Privacy**。
-
-## 权限级别
-
-- `allowed`：基础聊天，以及当前关联上下文内的低风险操作
-- `trusted`：记忆、文件、日程、自动化和其他持久化工作流
-- `admin`：trusted 权限外加角色管理和临时授权
-
-## 示例
-
-- “记一下我的护照号。”
-- “我的家庭住址是什么？”
-- “提醒我明天早上 9 点提交申请。”
-- “发给 @someone：晚饭好了。”
-- “把这条消息发到家庭群。”
-- “把 @someone 设为 trusted。”
-
-## 命令
-
-- `/help`
-- `/new`
-- `/model` — 仅 admin
+`config.toml` 支持从项目 `.env` 和进程环境变量展开 `${VAR}`。
 
 ## 开发
 
@@ -82,4 +44,7 @@ npm test
 npm run test:live
 ```
 
-工程规则见 `AGENTS.md`；bot assistant workspace 细节见 `docs/agent-architecture.md`。
+- 运行入口：`src/bot/main.ts`
+- 飞书适配：`src/bot/feishu/**`
+- 确定性操作：`src/bot/operations/**`
+- Pi workspace：`agent/`

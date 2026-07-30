@@ -1,7 +1,5 @@
 import { formatIsoInTimezoneLocalString } from "bot/app/time";
 import { logger } from "bot/app/logger";
-import { canManageAllSchedules, canManageOwnSchedules, canReadSchedules, canRequesterCreateEventTargets } from "bot/operations/access/control";
-import { accessLevelForUser } from "bot/operations/access/roles";
 import { resolveUser } from "bot/operations/context/store";
 import { getCurrentOccurrence, listReminderInstances, resolveScheduleDisplayTimezone, resolveEventsByMatch, scheduleEventScheduleSummary, eventMatchesFilters, type EventRecord } from "bot/operations/events";
 import { buildEventScheduleFromExternal } from "bot/operations/events/schedule_parser";
@@ -10,7 +8,7 @@ import type { Reminder } from "bot/operations/events/types";
 import type { ToolContext } from "bot/operations/tools/runtime";
 
 function requesterTimezoneForTool(context: ToolContext): string | undefined {
-  const requesterUserId = context.asInt(context.args.requesterUserId);
+  const requesterUserId = context.asId(context.args.requesterUserId);
   if (!requesterUserId) return context.config.bot.defaultTimezone;
   return resolveUser(context.config.paths.repoRoot, requesterUserId, { defaultTimezone: context.config.bot.defaultTimezone })?.timezone?.trim() || context.config.bot.defaultTimezone;
 }
@@ -86,14 +84,10 @@ function serializeEventForTool(context: ToolContext, event: EventRecord): Record
 }
 
 export async function handleEventsList(context: ToolContext): Promise<void> {
-  const requesterUserId = context.asInt(context.args.requesterUserId);
-  const accessLevel = accessLevelForUser(context.config, requesterUserId);
+  const requesterUserId = context.asId(context.args.requesterUserId);
   context.logInfo(`event_list: loading visible events for requester ${requesterUserId ?? "unknown"}`);
-  if (!canReadSchedules(accessLevel)) context.output({ ok: false, error: "schedule-read-not-allowed" });
   const events = (await readEventRecords(context.config)).filter((event) => event.status !== "deleted");
-  const visible = canManageAllSchedules(accessLevel)
-    ? events
-    : events.filter((event) => canManageOwnSchedules(accessLevel) && event.createdByUserId === requesterUserId);
+  const visible = events;
   const match = context.parseObjectArg(context.args.match) || {};
   const filtered = Object.keys(match).length > 0
     ? visible.filter((event) => eventMatchesFilters(event, match, effectiveRequesterTimezoneForTool(context)))
@@ -103,18 +97,13 @@ export async function handleEventsList(context: ToolContext): Promise<void> {
 
 export async function handleEventsGet(context: ToolContext): Promise<void> {
   const eventId = context.cleanText(context.args.eventId);
-  const requesterUserId = context.asInt(context.args.requesterUserId);
-  const accessLevel = accessLevelForUser(context.config, requesterUserId);
+  const requesterUserId = context.asId(context.args.requesterUserId);
   context.logInfo(`event_get: resolving event${eventId ? ` ${eventId}` : " by match"}`);
-  if (!canReadSchedules(accessLevel)) context.output({ ok: false, error: "schedule-read-not-allowed" });
   if (eventId) {
     const events = await readEventRecords(context.config);
     const event = events.find((item) => item.id === eventId) || null;
     if (!event) {
       context.output({ ok: false, error: "event-not-resolved", event: null });
-    }
-    if (!canManageAllSchedules(accessLevel) && event.createdByUserId !== requesterUserId) {
-      context.output({ ok: false, error: "event-read-not-allowed" });
     }
     context.output({ ok: true, event: serializeEventForTool(context, event) });
   }
@@ -136,22 +125,18 @@ export async function handleEventsGet(context: ToolContext): Promise<void> {
 }
 
 export async function handleEventsCreate(context: ToolContext): Promise<void> {
-  const { args, cleanText, asInt, parseObjectArg, output, logTextContent } = context;
+  const { args, cleanText, asId, parseObjectArg, output, logTextContent } = context;
   const title = cleanText(args.title);
   const note = cleanText(args.note);
-  const requesterUserId = asInt(args.requesterUserId);
-  const targetUserId = asInt(args.targetUserId) || requesterUserId;
-  const targetChatId = asInt(args.targetChatId);
+  const requesterUserId = asId(args.requesterUserId);
+  const targetUserId = asId(args.targetUserId) || requesterUserId;
+  const targetChatId = asId(args.targetChatId);
   const schedule = parseObjectArg(args.schedule);
   context.logInfo(`event_create: creating ${title || "untitled event"}`);
   await logger.info(`system tool schedules_create request hasTitle=${title ? "yes" : "no"} hasSchedule=${schedule ? "yes" : "no"} scheduleKind=${typeof schedule?.kind === "string" ? schedule.kind : typeof schedule?.datetime === "string" ? "datetime" : "unknown"} targetUserId=${targetUserId ?? "unknown"} targetChatId=${targetChatId ?? "unknown"} note=${note ? logTextContent(note) : '""'}`);
   if (!title || !schedule || (!targetUserId && targetChatId == null)) output({ ok: false, error: "missing-title-schedule-or-target", details: { hasTitle: Boolean(title), hasSchedule: Boolean(schedule), hasTarget: Boolean(targetUserId || targetChatId != null) } });
 
   const targets = targetChatId != null ? [{ targetKind: "chat" as const, targetId: targetChatId }] : [{ targetKind: "user" as const, targetId: targetUserId! }];
-  if (!canRequesterCreateEventTargets(context.config, requesterUserId, targets)) {
-    output({ ok: false, error: "schedule-create-not-allowed" });
-  }
-
   const timezone = cleanText(args.timezone) || context.config.bot.defaultTimezone;
   const category = cleanText(args.category);
   const rawSpecialKind = cleanText(args.specialKind);
@@ -185,7 +170,7 @@ export async function handleEventsCreate(context: ToolContext): Promise<void> {
 }
 
 export async function handleEventMutation(context: ToolContext, operation: "update" | "delete" | "pause" | "resume"): Promise<void> {
-  const requesterUserId = context.asInt(context.args.requesterUserId);
+  const requesterUserId = context.asId(context.args.requesterUserId);
   const match = context.parseObjectArg(context.args.match) || {};
   const changes = context.parseObjectArg(context.args.changes) || {};
   context.logInfo(`event:${operation}: applying request`);
@@ -196,8 +181,8 @@ export async function handleEventMutation(context: ToolContext, operation: "upda
     const timeSemantics = context.cleanText(context.args.timeSemantics);
     const category = context.cleanText(context.args.category);
     const specialKind = context.cleanText(context.args.specialKind);
-    const targetUserId = context.asInt(context.args.targetUserId);
-    const targetChatId = context.asInt(context.args.targetChatId);
+    const targetUserId = context.asId(context.args.targetUserId);
+    const targetChatId = context.asId(context.args.targetChatId);
     const schedule = context.parseObjectArg(context.args.schedule);
     const targets = context.parseObjectArg(context.args.targets)?.targets;
     if (title && changes.title == null) changes.title = title;
@@ -210,8 +195,8 @@ export async function handleEventMutation(context: ToolContext, operation: "upda
     if ((specialKind === "birthday" || specialKind === "festival" || specialKind === "anniversary" || specialKind === "memorial") && changes.specialKind == null) changes.specialKind = specialKind;
     if (schedule && changes.schedule == null) changes.schedule = schedule;
     if (Array.isArray(targets) && changes.targets == null) changes.targets = targets;
-    if (typeof targetUserId === "number" && changes.targetUserId == null) changes.targetUserId = targetUserId;
-    if (typeof targetChatId === "number" && changes.targetChatId == null) changes.targetChatId = targetChatId;
+    if (typeof targetUserId === "string" && changes.targetUserId == null) changes.targetUserId = targetUserId;
+    if (typeof targetChatId === "string" && changes.targetChatId == null) changes.targetChatId = targetChatId;
   }
   const payload = operation === "update"
     ? { match, changes }

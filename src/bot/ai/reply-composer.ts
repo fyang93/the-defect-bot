@@ -5,7 +5,7 @@ import { resolveChat, resolveUser } from "bot/operations/context/store";
 import { extractDisplayableText } from "./response";
 import type { ReminderTextContext } from "./types";
 
-export type ReplyComposerInputContext = { requesterUserId?: number; chatId?: number; chatType?: string; preferredLanguage?: string };
+export type ReplyComposerInputContext = { requesterUserId?: string; chatId?: string; chatType?: string; preferredLanguage?: string };
 export type ComposerPromptInput = {
   task: string;
   context: string;
@@ -27,8 +27,8 @@ export class ReplyComposer {
 
   async generateStartupGreeting(input?: ReplyComposerInputContext): Promise<string | null> {
     const request = this.buildComposerRequest("startup-greeting", [
-      "The Telegram bot has just started.",
-      "Write one short proactive startup greeting for the administrator.",
+      "The Feishu bot has just started.",
+      "Write one short proactive startup greeting for the user.",
       "Return only the greeting text. Do not send it and do not take any action.",
       ...await this.buildStartupGreetingContextLines(input),
     ], { preferredLanguage: input?.preferredLanguage });
@@ -69,7 +69,7 @@ export class ReplyComposer {
       ...this.buildMinimalContextLines(input),
       "Confirmed maintenance facts:",
       ...cleanFacts.map((item) => `- ${item}`),
-      "Write one concise admin-facing maintenance report using only these facts.",
+      "Write one concise user-facing maintenance report using only these facts.",
     ], { preferredLanguage: input?.preferredLanguage });
 
     const composed = this.extractDirectTextReply(await this.promptForText(request)).trim();
@@ -88,13 +88,13 @@ export class ReplyComposer {
       task,
       context,
       language: options?.preferredLanguage || this.config.bot.language,
-      capabilities: options?.capabilities || "web: false\nstateMutation: false\ntelegramDelivery: false\nrepoTools: false",
+      capabilities: options?.capabilities || "web: false\nstateMutation: false\nfeishuDelivery: false\nrepoTools: false",
     });
   }
 
   private async buildStartupGreetingContextLines(input?: ReplyComposerInputContext): Promise<string[]> {
     const requesterUserId = input?.requesterUserId;
-    if (typeof requesterUserId !== "number") {
+    if (typeof requesterUserId !== "string") {
       return ["Do not mention the current time or date unless the user explicitly asked for it."];
     }
 
@@ -102,7 +102,7 @@ export class ReplyComposer {
     const timezone = known?.timezone?.trim() || getUserTimezone(requesterUserId)?.trim() || this.config.bot.defaultTimezone;
     return [
       "Do not mention the current time or date unless the user explicitly asked for it.",
-      known?.displayName || known?.username ? `Requester: ${known?.displayName || known?.username}${known?.username ? ` (@${known.username})` : ""}.` : `Requester user id: ${requesterUserId}.`,
+      known?.displayName ? `Requester: ${known.displayName}.` : `Requester user id: ${requesterUserId}.`,
       timezone ? `Requester timezone: ${timezone}.` : "",
     ].filter(Boolean);
   }
@@ -110,16 +110,16 @@ export class ReplyComposer {
   private buildMinimalContextLines(input?: ReplyComposerInputContext): string[] {
     const lines: string[] = [];
     const requesterUserId = input?.requesterUserId;
-    if (typeof requesterUserId === "number") {
+    if (typeof requesterUserId === "string") {
       const known = resolveUser(this.config.paths.repoRoot, requesterUserId, { defaultTimezone: this.config.bot.defaultTimezone });
-      const requesterLabel = known?.displayName || known?.username || String(requesterUserId);
-      lines.push(`Current requester: ${requesterLabel}${known?.username ? ` (@${known.username})` : ""}.`);
+      const requesterLabel = known?.displayName || requesterUserId;
+      lines.push(`Current requester: ${requesterLabel}.`);
       const timezone = known?.timezone?.trim() || getUserTimezone(requesterUserId)?.trim() || this.config.bot.defaultTimezone;
       if (timezone) lines.push(`Requester timezone: ${timezone}.`);
     }
 
     const chatId = input?.chatId;
-    if (typeof chatId === "number") {
+    if (typeof chatId === "string") {
       const knownChat = resolveChat(this.config.paths.repoRoot, chatId);
       const conversation = knownChat
         ? `${knownChat.type || "chat"}${knownChat.title ? `, ${knownChat.title}` : ""}`

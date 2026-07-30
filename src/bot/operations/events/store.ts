@@ -15,7 +15,7 @@ export type EventRecordDraft = {
   category?: "routine" | "special" | "automation";
   specialKind?: ScheduleSpecialKind;
   timeSemantics?: EventTimeSemantics;
-  createdByUserId?: number;
+  createdByUserId?: string;
   reminders?: Reminder[];
   status?: EventRecord["status"];
   createdAt?: string;
@@ -50,8 +50,8 @@ export function resolveScheduleTimezone(
     subjectTimezone?: string;
     messageTime?: string;
     timeSemantics?: EventTimeSemantics;
-    recipientUserId?: number;
-    userId?: number;
+    recipientUserId?: string;
+    userId?: string;
   },
 ): string {
   const explicitTimezone = input.explicitTimezone?.trim();
@@ -109,8 +109,8 @@ function normalizeTarget(raw: unknown): EventTarget | null {
   if (!raw || typeof raw !== "object") return null;
   const record = raw as Record<string, unknown>;
   const targetKind = record.targetKind === "chat" ? "chat" : record.targetKind === "user" ? "user" : null;
-  const targetId = Number(record.targetId);
-  if (!targetKind || !Number.isInteger(targetId)) return null;
+  const targetId = typeof record.targetId === "string" || typeof record.targetId === "number" ? String(record.targetId).trim() : "";
+  if (!targetKind || !targetId) return null;
   return { targetKind, targetId };
 }
 
@@ -137,8 +137,8 @@ function normalizeEvent(raw: unknown, _fallbackTimezone?: string): EventRecord |
   const rawNote = typeof record.note === "string" && record.note.trim() ? record.note.trim() : undefined;
   const timeSemantics = record.timeSemantics === "absolute" || record.timeSemantics === "local" ? record.timeSemantics : undefined;
   const schedule = normalizeEventSchedule(record.schedule);
-  const createdByUserId = Number.isInteger(Number(record.createdByUserId))
-    ? Number(record.createdByUserId)
+  const createdByUserId = typeof record.createdByUserId === "string" || typeof record.createdByUserId === "number"
+    ? String(record.createdByUserId)
     : Array.isArray(record.targets)
       ? record.targets
           .map(normalizeTarget)
@@ -243,7 +243,7 @@ export async function writeEventRecords(config: AppConfig, events: EventRecord[]
 }
 
 export function buildEventRecord(config: AppConfig, draft: EventRecordDraft): EventRecord {
-  const category = draft.category === "automation" ? "automation" : draft.category === "special" || draft.specialKind ? "special" : draft.category === "routine" ? "routine" : undefined;
+  const category = draft.category === "automation" ? "automation" : draft.category === "special" || draft.specialKind ? "special" : "routine";
   const note = category === "automation" ? buildScheduledTaskPrompt(draft.title, draft.note) : draft.note;
   return {
     id: `rmd_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,

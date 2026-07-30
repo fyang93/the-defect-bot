@@ -45,12 +45,9 @@ async function processUserRefresh(task: SyncTask): Promise<void> {
   if (!userId) return;
   const canonical = resolveUser(task.repoRoot, userId);
   if (!canonical) return;
-  const current = state.telegramUserCache[userId];
-  state.telegramUserCache[userId] = {
-    username: canonical.username ?? current?.username,
-    firstName: current?.firstName,
-    lastName: current?.lastName,
-    displayName: canonical.displayName || current?.displayName || canonical.username || userId,
+  const current = state.feishuUserCache[userId];
+  state.feishuUserCache[userId] = {
+    displayName: canonical.displayName || current?.displayName || userId,
     lastSeenAt: canonical.lastSeenAt || current?.lastSeenAt || new Date().toISOString(),
   };
   if (canonical.timezone) {
@@ -66,9 +63,9 @@ async function processChatRefresh(task: SyncTask): Promise<void> {
   if (!chatId) return;
   const canonical = resolveChat(task.repoRoot, chatId);
   if (!canonical) return;
-  const current = state.telegramChatCache[chatId];
-  state.telegramChatCache[chatId] = {
-    type: canonical.type || current?.type || "private",
+  const current = state.feishuChatCache[chatId];
+  state.feishuChatCache[chatId] = {
+    type: canonical.type || current?.type || "group",
     title: canonical.title ?? current?.title,
     lastSeenAt: canonical.lastSeenAt || current?.lastSeenAt || new Date().toISOString(),
   };

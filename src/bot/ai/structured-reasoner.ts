@@ -1,6 +1,6 @@
 import type { AppConfig, AiAttachment, UploadedFile } from "bot/app/types";
 import { logger } from "bot/app/logger";
-import { buildPrompt, type RequestAccessRole } from "./prompt";
+import { buildPrompt, type RequestPermissionMode } from "./prompt";
 import type { AiTurnResult } from "./types";
 
 export class StructuredReasoner {
@@ -19,7 +19,7 @@ export class StructuredReasoner {
     uploadedFiles: UploadedFile[] = [],
     attachments: AiAttachment[] = [],
     messageTime?: string,
-    accessRole: RequestAccessRole = "allowed",
+    permissionMode: RequestPermissionMode = "full",
     scopeKey?: string,
     assistantContextText?: string,
     requesterTimezone?: string | null,
@@ -29,7 +29,7 @@ export class StructuredReasoner {
       uploadedFiles,
       this.config.bot.defaultTimezone,
       messageTime,
-      accessRole,
+      permissionMode,
       assistantContextText,
       requesterTimezone,
     );

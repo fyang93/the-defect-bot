@@ -5,8 +5,8 @@ export function looksLikeStructuredOutputIntent(text: string): boolean {
   if (!trimmed) return false;
   return /^\s*\[(?:response|answer)\][\s\S]*\[\/(?:response|answer)\]\s*$/i.test(trimmed)
     || /^```(?:json)?/i.test(trimmed)
-    || /(^|\n)(?:answer_mode|message|deliveries|schedules|pending_authorizations|tasks|file_writes)\s*:/i.test(trimmed)
-    || /"(?:answer_mode|message|deliveries|schedules|pending_authorizations|tasks|file_writes)"\s*:/.test(trimmed);
+    || /(^|\n)(?:answer_mode|message|deliveries|schedules|tasks|file_writes)\s*:/i.test(trimmed)
+    || /"(?:answer_mode|message|deliveries|schedules|tasks|file_writes)"\s*:/.test(trimmed);
 }
 
 function looksLikeMalformedAssistantOutput(text: string): boolean {

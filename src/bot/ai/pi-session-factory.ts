@@ -5,8 +5,7 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   type AgentSession,
-  type AuthStorage,
-  type ModelRegistry,
+  type ModelRuntime,
   type ResourceLoader,
   SessionManager,
   SettingsManager,
@@ -38,8 +37,7 @@ export class PiSessionFactory {
     config: AppConfig;
     cwd: () => string;
     agentDir: () => string;
-    authStorage: AuthStorage;
-    modelRegistry: ModelRegistry;
+    modelRuntime: () => Promise<ModelRuntime>;
     ensureReady: () => Promise<void>;
     selectedModel: () => any | undefined;
     systemPromptForRole: (role: PiPromptRole) => string;
@@ -59,12 +57,12 @@ export class PiSessionFactory {
     const startedAt = Date.now();
     await this.deps.ensureReady();
     const selected = this.deps.selectedModel();
+    const modelRuntime = await this.deps.modelRuntime();
     const { loader, settingsManager } = await this.getResourceLoader(role, useTools, options);
     const { session } = await createAgentSession({
       cwd: this.deps.cwd(),
       agentDir: this.deps.agentDir(),
-      authStorage: this.deps.authStorage,
-      modelRegistry: this.deps.modelRegistry,
+      modelRuntime,
       model: selected,
       resourceLoader: loader,
       sessionManager: SessionManager.inMemory(this.deps.cwd()),
@@ -136,7 +134,7 @@ export class PiSessionFactory {
   private summarizeActiveTools(names: string[]): string {
     const builtin = names.filter((name) => ["read", "bash", "edit", "write"].includes(name));
     const web = names.filter((name) => ["web_search", "fetch_content", "get_search_content"].includes(name));
-    const bot = names.filter((name) => /^(event|telegram|user|auth)_/.test(name));
+    const bot = names.filter((name) => /^(event|feishu|user)_/.test(name));
     const other = names.length - builtin.length - web.length - bot.length;
     return `total=${names.length} builtin=${builtin.join(",") || "none"} web=${web.length} bot=${bot.length} other=${other}`;
   }

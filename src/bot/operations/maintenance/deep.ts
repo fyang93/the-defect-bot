@@ -1,12 +1,11 @@
-import { readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import type { AiService } from "bot/ai";
 import { ScheduleEngine } from "bot/operations/events";
-import { readEventRecords, writeEventRecords } from "bot/operations/events/store";
 import type { AppConfig } from "bot/app/types";
 import { logger } from "bot/app/logger";
 import { persistState, state } from "bot/app/state";
-import { loadChats, loadUsers } from "bot/operations/context/store";
+import { loadUsers } from "bot/operations/context/store";
 import { diffSnapshots, memorySnapshot, recentlyChangedFiles } from "./snapshot";
 import { appendMaintenanceLogSection } from "./log";
 
@@ -54,126 +53,26 @@ async function notifyMaintenanceChanges(
 
   const draft = facts.join("\n");
   try {
-    const adminUserId = config.telegram.adminUserId ?? undefined;
-    const message = await agentService.composeMaintenanceReport(facts, {
-      requesterUserId: adminUserId,
-      chatId: adminUserId,
-      chatType: "private",
-      preferredLanguage: config.bot.language,
-    });
+    const message = await agentService.composeMaintenanceReport(facts, { preferredLanguage: config.bot.language });
     await deps.onChange(message.trim() || draft);
   } catch {
     await deps.onChange(draft);
   }
 }
 
-type TelegramChatRecord = {
-  type: string;
-  title?: string;
-  lastSeenAt: string;
-};
-
-async function refreshTelegramEntityRegistryLinks(config: AppConfig): Promise<{ userUpdates: number; chatUpdates: number }> {
+async function refreshFeishuEntityRegistryLinks(config: AppConfig): Promise<{ userUpdates: number; chatUpdates: number }> {
   const users = loadUsers(config.paths.repoRoot);
   let userUpdates = 0;
-  for (const [telegramUserId, user] of Object.entries(state.telegramUserCache)) {
-    const canonical = users[telegramUserId];
+  for (const [feishuUserId, user] of Object.entries(state.feishuUserCache)) {
+    const canonical = users[feishuUserId];
     if (!canonical) continue;
-    if (canonical.username && user.username !== canonical.username) {
-      user.username = canonical.username;
+    if (canonical.displayName && user.displayName !== canonical.displayName) {
+      user.displayName = canonical.displayName;
       userUpdates += 1;
       continue;
     }
   }
   return { userUpdates, chatUpdates: 0 };
-}
-
-function parseSeenAt(value: string | undefined): number {
-  const parsed = Date.parse(value || "");
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-async function writeChatRegistry(config: AppConfig, chats: Record<string, unknown>): Promise<void> {
-  const filePath = path.join(config.paths.repoRoot, "system", "chats.json");
-  await writeFile(filePath, `${JSON.stringify({ chats }, null, 2)}\n`, "utf8");
-}
-
-async function migrateLegacyGroupChats(config: AppConfig): Promise<{ removedChatIds: string[]; migratedEventTargets: number; pairs: Array<{ oldChatId: string; newChatId: string; title: string }> }> {
-  const chatRegistry = loadChats(config.paths.repoRoot);
-  const chats = Object.entries(chatRegistry)
-    .map(([chatId, chat]) => ({ chatId, chat: { type: chat.type || "private", title: chat.title, lastSeenAt: chat.lastSeenAt || "" } }))
-    .filter(({ chat }) => chat.title && (chat.type === "group" || chat.type === "supergroup"));
-
-  const byTitle = new Map<string, Array<{ chatId: string; chat: TelegramChatRecord }>>();
-  for (const entry of chats) {
-    const title = entry.chat.title?.trim();
-    if (!title) continue;
-    const bucket = byTitle.get(title) || [];
-    bucket.push(entry as { chatId: string; chat: TelegramChatRecord });
-    byTitle.set(title, bucket);
-  }
-
-  const pairs: Array<{ oldChatId: string; newChatId: string; title: string }> = [];
-  for (const [title, entries] of byTitle.entries()) {
-    const supergroups = entries.filter(({ chat }) => chat.type === "supergroup");
-    const groups = entries.filter(({ chat }) => chat.type === "group");
-    if (supergroups.length === 0 || groups.length === 0) continue;
-    const newestSupergroup = supergroups.sort((a, b) => parseSeenAt(b.chat.lastSeenAt) - parseSeenAt(a.chat.lastSeenAt))[0];
-    if (!newestSupergroup) continue;
-    for (const group of groups) {
-      pairs.push({ oldChatId: group.chatId, newChatId: newestSupergroup.chatId, title });
-    }
-  }
-
-  if (pairs.length === 0) return { removedChatIds: [], migratedEventTargets: 0, pairs: [] };
-
-  const migrationMap = new Map(pairs.map((pair) => [pair.oldChatId, pair]));
-  const schedules = await readEventRecords(config);
-  let migratedEventTargets = 0;
-  let schedulesChanged = false;
-  for (const event of schedules) {
-    let eventChanged = false;
-    for (const target of event.targets) {
-      if (target.targetKind !== "chat") continue;
-      const migration = migrationMap.get(String(target.targetId));
-      if (!migration) continue;
-      target.targetId = Number(migration.newChatId);
-      migratedEventTargets += 1;
-      eventChanged = true;
-    }
-    if (eventChanged) {
-      event.updatedAt = new Date().toISOString();
-      schedulesChanged = true;
-    }
-  }
-  if (schedulesChanged) {
-    await writeEventRecords(config, schedules);
-  }
-
-  const removedChatIds: string[] = [];
-  if (pairs.length > 0) {
-    const filePath = path.join(config.paths.repoRoot, "system", "chats.json");
-    let rawChats: Record<string, unknown> = {};
-    try {
-      const parsed = JSON.parse(await readFile(filePath, "utf8")) as { chats?: Record<string, unknown> };
-      rawChats = parsed.chats && typeof parsed.chats === "object" ? parsed.chats : {};
-    } catch {
-      rawChats = {};
-    }
-
-    for (const pair of pairs) {
-      if (!(pair.oldChatId in rawChats)) continue;
-      delete rawChats[pair.oldChatId];
-      delete state.telegramChatCache[pair.oldChatId];
-      removedChatIds.push(pair.oldChatId);
-    }
-
-    if (removedChatIds.length > 0) {
-      await writeChatRegistry(config, rawChats);
-    }
-  }
-
-  return { removedChatIds: removedChatIds.sort((a, b) => a.localeCompare(b)), migratedEventTargets, pairs };
 }
 
 async function clearTmpContents(root: string, cutoffMs: number, dir = root): Promise<string[]> {
@@ -258,20 +157,6 @@ async function runMaintainerCycle(
     });
   }
 
-  const chatMigration = await migrateLegacyGroupChats(config);
-  if (chatMigration.removedChatIds.length > 0) {
-    await logger.info(`maintainer loop migrated ${chatMigration.removedChatIds.length} legacy group chats to supergroups schedulesUpdated=${chatMigration.migratedEventTargets}`);
-    preChanges.push(`Migrated ${chatMigration.removedChatIds.length} legacy group chats to supergroups: ${detailPreview(chatMigration.pairs.map((pair) => `${pair.title}: ${pair.oldChatId} -> ${pair.newChatId}`))}.`);
-    if (chatMigration.migratedEventTargets > 0) {
-      preChanges.push(`Updated ${chatMigration.migratedEventTargets} schedule chat targets linked to those chats.`);
-    }
-    await appendMaintenanceLogSection(config, new Date().toISOString(), maintenanceTrigger(force, idleMs, "chat migration cleanup"), {
-      summary: `migrated ${chatMigration.removedChatIds.length} legacy group chats to supergroups`,
-      pairs: chatMigration.pairs.map((pair) => `${pair.title}: ${pair.oldChatId} -> ${pair.newChatId}`).join(", "),
-      scheduleTargetsUpdated: String(chatMigration.migratedEventTargets),
-    });
-  }
-
   const beforeSnapshot = await memorySnapshot(config.paths.repoRoot);
   const changedFiles = force ? [...beforeSnapshot.keys()].sort((a, b) => a.localeCompare(b)) : recentlyChangedFiles(beforeSnapshot, state.lastMaintainedAt);
   if (!force && changedFiles.length === 0) {
@@ -288,7 +173,7 @@ async function runMaintainerCycle(
     const changes = diffSnapshots(beforeSnapshot, afterSnapshot);
     let registryLinkRefresh = { userUpdates: 0, chatUpdates: 0 };
     try {
-      registryLinkRefresh = await refreshTelegramEntityRegistryLinks(config);
+      registryLinkRefresh = await refreshFeishuEntityRegistryLinks(config);
     } catch (error) {
       await logger.warn(`maintainer loop registry link refresh failed: ${error instanceof Error ? error.message : String(error)}`);
     }

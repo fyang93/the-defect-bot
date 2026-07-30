@@ -1,35 +1,20 @@
 import { handleEventMutation, handleEventsCreate, handleEventsGet, handleEventsList } from "bot/operations/tools/events";
-import { addPendingAuthorization, appendToolLogLine, ToolOutput, emitToolTerminalLine, initializeToolContext, logToolInvocation, summarizeArgsForLog, type ToolArgs } from "bot/operations/tools/runtime";
-import { handleTelegramListRecipients, handleTelegramSendFile, handleTelegramSendMessage } from "bot/operations/tools/telegram";
-import { handleUsersAddAlias, handleUsersGet, handleUsersList, handleUsersRecordPerson, handleUsersSetAccess, handleUsersSetPersonPath, handleUsersSetTimezone, handleUsersUpdateRules } from "bot/operations/tools/users";
+import { appendToolLogLine, ToolOutput, emitToolTerminalLine, initializeToolContext, logToolInvocation, summarizeArgsForLog, type ToolArgs } from "bot/operations/tools/runtime";
+import { handleFeishuListRecipients, handleFeishuSendFile, handleFeishuSendMessage } from "bot/operations/tools/feishu";
+import { handleUsersAddAlias, handleUsersGet, handleUsersList, handleUsersRecordPerson, handleUsersSetPersonPath, handleUsersSetTimezone, handleUsersUpdateRules } from "bot/operations/tools/users";
 
-function summarizeToolResult(command: string, value: unknown): { level: "INFO" | "WARN"; message: string } {
-  const record = value && typeof value === "object" ? value as Record<string, unknown> : null;
-  const summary = typeof record?.summary === "string" && record.summary.trim() ? record.summary.trim() : "";
-  const error = typeof record?.error === "string" && record.error.trim() ? record.error.trim() : "";
-  const reason = typeof record?.reason === "string" && record.reason.trim() ? record.reason.trim() : "";
-  const status = typeof record?.status === "string" && record.status.trim() ? record.status.trim() : "";
-  const changed = typeof record?.changed === "boolean" ? record.changed : undefined;
-  const delivered = record?.delivered === true;
-  const eventCount = Array.isArray(record?.events) ? record.events.length : undefined;
-
-  if (summary) return { level: record?.ok === false ? "WARN" : "INFO", message: `${command}: ${summary}` };
-  if (record?.ok === false) return { level: "WARN", message: `${command}: ${error || reason || status || "failed"}` };
-  if (delivered) {
-    const target = typeof record?.recipientLabel === "string" && record.recipientLabel.trim() ? record.recipientLabel.trim() : String(record?.recipientId ?? "recipient");
-    return { level: "INFO", message: `${command}: delivered to ${target}` };
-  }
-  if (typeof changed === "boolean") return { level: "INFO", message: `${command}: ${changed ? "changed" : "no change"}` };
-  if (typeof eventCount === "number") return { level: "INFO", message: `${command}: ${eventCount} event(s)` };
-  if (status) return { level: "INFO", message: `${command}: ${status}` };
+function summarize(command: string, value: unknown): { level: "INFO" | "WARN"; message: string } {
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  if (record.ok === false) return { level: "WARN", message: `${command}: ${record.error || record.reason || "failed"}` };
+  if (record.delivered) return { level: "INFO", message: `${command}: delivered to ${record.recipientLabel || record.recipientId}` };
+  if (Array.isArray(record.events)) return { level: "INFO", message: `${command}: ${record.events.length} event(s)` };
   return { level: "INFO", message: `${command}: done` };
 }
 
-async function dispatchToolCommand(command: string, context: Awaited<ReturnType<typeof initializeToolContext>>): Promise<void> {
+async function dispatch(command: string, context: Awaited<ReturnType<typeof initializeToolContext>>): Promise<void> {
   switch (command) {
     case "user:list": await handleUsersList(context); break;
     case "user:get": await handleUsersGet(context); break;
-    case "user:set-access": await handleUsersSetAccess(context); break;
     case "user_set_timezone": await handleUsersSetTimezone(context); break;
     case "user_set_person_path": await handleUsersSetPersonPath(context); break;
     case "user_add_alias": await handleUsersAddAlias(context); break;
@@ -42,10 +27,9 @@ async function dispatchToolCommand(command: string, context: Awaited<ReturnType<
     case "event_delete": await handleEventMutation(context, "delete"); break;
     case "event_pause": await handleEventMutation(context, "pause"); break;
     case "event_resume": await handleEventMutation(context, "resume"); break;
-    case "auth_add_pending": await addPendingAuthorization(context); break;
-    case "telegram_list_recipients": await handleTelegramListRecipients(context); break;
-    case "telegram_send_message": await handleTelegramSendMessage(context); break;
-    case "telegram_send_file": await handleTelegramSendFile(context); break;
+    case "feishu_list_recipients": await handleFeishuListRecipients(context); break;
+    case "feishu_send_message": await handleFeishuSendMessage(context); break;
+    case "feishu_send_file": await handleFeishuSendFile(context); break;
     default: context.output({ ok: false, error: `unsupported-command:${command}` });
   }
 }
@@ -53,20 +37,15 @@ async function dispatchToolCommand(command: string, context: Awaited<ReturnType<
 export async function runToolCommand(command: string, args: ToolArgs = {}, options: { configPath?: string } = {}): Promise<unknown> {
   const context = await initializeToolContext(args, options.configPath);
   const startedAt = Date.now();
-  emitToolTerminalLine(context.config, "INFO", `${command || "unknown-command"}: start`);
+  emitToolTerminalLine(context.config, "INFO", `${command}: start`);
   await logToolInvocation(context.config, command, command, args);
-  try {
-    await dispatchToolCommand(command.trim(), context);
-    return { ok: true };
-  } catch (error) {
+  try { await dispatch(command.trim(), context); return { ok: true }; }
+  catch (error) {
     if (error instanceof ToolOutput) {
       appendToolLogLine(context.config, "INFO", `tool operation complete command=${command} ms=${Date.now() - startedAt} output=${summarizeArgsForLog(error.value)}`);
-      const summary = summarizeToolResult(command, error.value);
-      emitToolTerminalLine(context.config, summary.level, summary.message);
-      return error.value;
+      const result = summarize(command, error.value); emitToolTerminalLine(context.config, result.level, result.message); return error.value;
     }
-    appendToolLogLine(context.config, "ERROR", `tool operation failed command=${command} ms=${Date.now() - startedAt} message=${error instanceof Error ? error.message : String(error)}`);
-    emitToolTerminalLine(context.config, "ERROR", `${command}: exception ${error instanceof Error ? error.message : String(error)}`);
+    appendToolLogLine(context.config, "ERROR", `tool operation failed command=${command} message=${error instanceof Error ? error.message : String(error)}`);
     throw error;
   }
 }

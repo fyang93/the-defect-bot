@@ -12,6 +12,7 @@ config.toml
 logs/
 agent/.pi/auth.json
 agent/.pi/models.json
+agent/.pi/models-store.json
 agent/.pi/sessions/
 agent/.pi/npm/
 

@@ -1,22 +1,23 @@
 import path from "node:path";
 import {
-  AuthStorage,
   ModelRegistry,
+  ModelRuntime,
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import type { AppConfig, AiAttachment, UploadedFile } from "bot/app/types";
 import { logger } from "bot/app/logger";
 import { formatIsoInTimezoneParts } from "bot/app/time";
 import { state, touchActivity } from "bot/app/state";
-import { buildPersonaStyleLines, buildProjectSystemPrompt, type RequestAccessRole } from "./prompt";
+import { buildPersonaStyleLines, buildProjectSystemPrompt, type RequestPermissionMode } from "./prompt";
 import { extractAiTurnResultFromText, isDisplayableUserText } from "./response";
 import type { AiTurnResult, AssistantPlanResult, AssistantProgressHandler, ReminderTextContext } from "./types";
 import { ReplyComposer, type ReplyComposerInputContext } from "./reply-composer";
 import { StructuredReasoner } from "./structured-reasoner";
 import { PromptTemplateRenderer } from "./prompt-templates";
-import { ensureNoToolExecution, extractAssistantText, summarizeMessagesForDebug, summarizeToolResults, type PiPromptRole } from "./pi-response";
+import { assistantErrorFromMessages, ensureNoToolExecution, extractAssistantText, summarizeMessagesForDebug, summarizeToolResults, type PiPromptRole } from "./pi-response";
 import { SessionBroker, type SessionBrokerEntry } from "./session-broker";
 import { PiSessionFactory, type CreateSessionOptions } from "./pi-session-factory";
+import { quotaText } from "./quota";
 
 export type { AiTurnResult } from "./types";
 
@@ -128,8 +129,8 @@ function parseModel(model: string | null): { providerID: string; modelID: string
 
 export class AiService {
   private config: AppConfig;
-  private readonly authStorage: AuthStorage;
-  private readonly modelRegistry: ModelRegistry;
+  private readonly modelRuntimePromise: Promise<ModelRuntime>;
+  private modelRegistry: ModelRegistry | null = null;
   private readonly sessions: SessionBroker<AgentSession>;
   private readonly replyComposer: ReplyComposer;
   private readonly structuredReasoner: StructuredReasoner;
@@ -140,8 +141,13 @@ export class AiService {
 
   constructor(config: AppConfig) {
     this.config = config;
-    this.authStorage = AuthStorage.create(path.join(this.piAgentDir(), "auth.json"));
-    this.modelRegistry = ModelRegistry.create(this.authStorage, path.join(this.piAgentDir(), "models.json"));
+    this.modelRuntimePromise = ModelRuntime.create({
+      authPath: path.join(this.piAgentDir(), "auth.json"),
+      modelsPath: path.join(this.piAgentDir(), "models.json"),
+    }).then((runtime) => {
+      this.modelRegistry = new ModelRegistry(runtime);
+      return runtime;
+    });
     this.sessions = new SessionBroker(
       (scopeKey, scopeLabel) => this.createSession(scopeKey, scopeLabel, "assistant", true),
     );
@@ -150,8 +156,7 @@ export class AiService {
       config,
       cwd: () => this.agentWorkspaceDir(),
       agentDir: () => this.piAgentDir(),
-      authStorage: this.authStorage,
-      modelRegistry: this.modelRegistry,
+      modelRuntime: () => this.modelRuntimePromise,
       ensureReady: () => this.ensureReady(),
       selectedModel: () => this.selectedModel(),
       systemPromptForRole: (role) => this.systemPromptForRole(role),
@@ -189,11 +194,13 @@ export class AiService {
 
   async ensureReady(): Promise<void> {
     const startedAt = Date.now();
+    await this.modelRuntimePromise;
+    const registry = this.requireModelRegistry();
     if (Date.now() - this.modelRegistryLastRefreshAt > MODEL_REGISTRY_REFRESH_CACHE_MS) {
-      this.modelRegistry.refresh();
+      await registry.refresh();
       this.modelRegistryLastRefreshAt = Date.now();
     }
-    const available = this.modelRegistry.getAvailable();
+    const available = registry.getAvailable();
     if (available.length === 0) {
       throw new Error("Pi SDK has no authenticated models available. Configure credentials in agent/.pi/auth.json, environment variables, or agent/.pi/models.json.");
     }
@@ -207,9 +214,14 @@ export class AiService {
     await logger.info("pi sdk assistant resources warmed");
   }
 
+  private requireModelRegistry(): ModelRegistry {
+    if (!this.modelRegistry) throw new Error("Pi model runtime is not initialized");
+    return this.modelRegistry;
+  }
+
   private selectedModel(): any | undefined {
     const parsed = parseModel(state.model);
-    return parsed ? this.modelRegistry.find(parsed.providerID, parsed.modelID) : undefined;
+    return parsed ? this.modelRegistry?.find(parsed.providerID, parsed.modelID) : undefined;
   }
 
   private async createSession(scopeKey: string | undefined, scopeLabel: string | undefined, role: PromptRole, useTools = role === "assistant", options: CreateSessionOptions = {}): Promise<SessionEntry> {
@@ -242,10 +254,15 @@ export class AiService {
     return aborted;
   }
 
+  async quotaText(): Promise<string> {
+    return quotaText(this.piAgentDir(), "left");
+  }
+
   async listModels(): Promise<{ defaults: Record<string, string>; models: string[] }> {
     await this.ensureReady();
-    const models = this.modelRegistry.getAvailable().map((model: any) => `${model.provider}/${model.id}`).sort((a, b) => a.localeCompare(b));
-    const current = this.selectedModel() || this.modelRegistry.getAvailable()[0];
+    const registry = this.requireModelRegistry();
+    const models = registry.getAvailable().map((model: any) => `${model.provider}/${model.id}`).sort((a, b) => a.localeCompare(b));
+    const current = this.selectedModel() || registry.getAvailable()[0];
     const defaults = current ? { [current.provider]: current.id } : {};
     return { defaults, models };
   }
@@ -262,7 +279,7 @@ export class AiService {
 
     try {
       await this.ensureReady();
-      const model = this.modelRegistry.find(parsed.providerID, parsed.modelID) as any;
+      const model = this.requireModelRegistry().find(parsed.providerID, parsed.modelID) as any;
       const input = Array.isArray(model?.input) ? model.input : [];
       const supportsAttachments = input.length === 0 || input.includes("image");
       this.attachmentCapabilityCache = { modelKey, supportsAttachments, checkedAt: now };
@@ -287,11 +304,11 @@ export class AiService {
     messageTime?: string,
     scopeKey?: string,
     _scopeLabel?: string,
-    accessRole: RequestAccessRole = "allowed",
+    permissionMode: RequestPermissionMode = "full",
     sharedConversationContextText?: string,
     requesterTimezone?: string | null,
   ): Promise<AiTurnResult> {
-    return this.structuredReasoner.run(text, uploadedFiles, attachments, messageTime, accessRole, scopeKey, sharedConversationContextText, requesterTimezone);
+    return this.structuredReasoner.run(text, uploadedFiles, attachments, messageTime, permissionMode, scopeKey, sharedConversationContextText, requesterTimezone);
   }
 
   async generateStartupGreeting(input?: ReplyComposerInputContext): Promise<string | null> {
@@ -313,7 +330,7 @@ export class AiService {
         `Task prompt: ${taskPrompt}`,
       ].join("\n"),
       language: this.config.bot.language,
-      capabilities: "web: true\nstateMutation: false\ntelegramDelivery: false\nrepoTools: false",
+      capabilities: "web: true\nstateMutation: false\nfeishuDelivery: false\nrepoTools: false",
     });
     return this.promptInDisposableComposerWebSession(request);
   }
@@ -332,10 +349,10 @@ export class AiService {
 
   async runAssistantTurn(input: {
     userRequestText: string;
-    requesterUserId?: number;
-    chatId?: number;
+    requesterUserId?: string;
+    chatId?: string;
     chatType?: string;
-    accessRole: RequestAccessRole;
+    permissionMode: RequestPermissionMode;
     uploadedFiles?: UploadedFile[];
     attachments?: AiAttachment[];
     messageTime?: string;
@@ -348,16 +365,13 @@ export class AiService {
   }): Promise<AssistantPlanResult> {
     const localMessageTime = formatIsoInTimezoneParts(input.messageTime, input.requesterTimezone?.trim() || this.config.bot.defaultTimezone);
     const nativeAttachments = input.attachments || [];
-    if (nativeAttachments.length > 0) {
-      await logger.warn(`deferred ${nativeAttachments.length} native attachment(s) for assistant turn; saved file paths remain available for tool-based handling`);
-    }
-    const policyFilteredAttachments: AiAttachment[] = [];
+    const policyFilteredAttachments: AiAttachment[] = nativeAttachments;
 
     const turnContext = [
       `requesterUserId=${input.requesterUserId ?? "unknown"}`,
       `chatId=${input.chatId ?? "unknown"}`,
       `chatType=${input.chatType || "unknown"}`,
-      `accessRole=${input.accessRole}`,
+      `permissionMode=${input.permissionMode}`,
       localMessageTime ? `requesterLocalTime=${localMessageTime.localDateTime} (${localMessageTime.timezone})` : "",
     ].filter(Boolean).join("\n");
     const savedFiles = input.uploadedFiles && input.uploadedFiles.length > 0
@@ -433,8 +447,12 @@ export class AiService {
     throw new Error("Assistant returned no displayable output.");
   }
 
+  async resetSessions(): Promise<void> {
+    await this.sessions.disposeAll();
+  }
+
   stop(): void {
-    void this.sessions.disposeAll();
+    void this.resetSessions();
   }
 
   private buildImages(attachments: AiAttachment[]): Array<{ type: "image"; data: string; mimeType: string }> {
@@ -656,6 +674,8 @@ export class AiService {
       unsubscribe();
     }
     const newMessages = session.messages.slice(beforeCount);
+    const modelError = assistantErrorFromMessages(newMessages);
+    if (modelError) throw new Error(`Pi model request failed: ${modelError}`);
     const lastAssistantText = [...newMessages].reverse().map(extractAssistantText).find((item) => item.trim()) || chunks.join("");
     return { rawText: lastAssistantText, completedActions, newMessages };
   }

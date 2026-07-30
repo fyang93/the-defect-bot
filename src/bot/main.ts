@@ -1,281 +1,149 @@
-import { Bot } from "grammy";
+import { createLarkChannel, LoggerLevel, type CardActionEvent, type EventDispatcher, type NormalizedMessage } from "@larksuiteoapi/node-sdk";
 import { loadConfig } from "bot/app/config";
 import { DEFAULT_CONFIG_PATH, startConfigWatcher } from "bot/app/config_runtime";
 import { configureLogger, logger } from "bot/app/logger";
+import { migrateSystemStateForFeishu } from "bot/app/migrate";
+import { currentModel, loadPersistentState, persistState, state } from "bot/app/state";
 import { AiService } from "bot/ai";
-import { currentModel, loadPersistentState, persistState } from "bot/app/state";
-import { pruneExpiredPendingAuthorizationsFromState } from "bot/operations/access/authorizations";
-import { ensureAdminUserAccessLevel } from "bot/operations/access/roles";
-import { ScheduleEngine, type ScheduleLoopHandle } from "bot/operations/events";
-import { tForLocale, tForUser, type Locale } from "bot/app/i18n";
-import { replyFormatted } from "bot/telegram/format";
-import { accessLevelForUserId, hasUserAccessLevel, isAddressedToBot, isAdminUserId, unauthorizedGuard } from "bot/operations/access/control";
-import { handleModelCallback } from "bot/telegram/model-selection/callback";
+import { currentRemindersText, ScheduleEngine, type ScheduleLoopHandle } from "bot/operations/events";
 import { ConversationController } from "bot/runtime/conversations/controller";
 import { createBotLifecycle } from "bot/runtime/boot";
+import { feishuModelPickerCard, feishuModelSelectedCard, isFeishuMessageAddressed, isFeishuMessageGoneError, parseFeishuCommand, parseFeishuMenuEventKey, parseFeishuModelAction } from "bot/feishu/message";
+import { rememberFeishuMessage } from "bot/feishu/registry";
 
-const configPath = DEFAULT_CONFIG_PATH;
-const config = loadConfig(configPath);
+const HELP = [
+  "Defect Bot 飞书入口。",
+  "",
+  "私聊可直接发送；群聊中请 @ 机器人。支持文字、图片、文档、音频和视频。",
+  "/help - 显示帮助",
+  "/new - 新建当前会话",
+  "/stop - 中止当前任务",
+  "/quota - 查看剩余 Pi 服务商额度",
+  "/reminders - 查看当前提醒",
+  "/model [provider/model] - 查看或切换模型",
+].join("\n");
+
+const config = loadConfig(DEFAULT_CONFIG_PATH);
+await migrateSystemStateForFeishu(config);
 await loadPersistentState(config.paths.stateFile);
-await ensureAdminUserAccessLevel(config);
 await configureLogger(config.paths.logFile);
-await logger.info(`bot process starting pid=${process.pid}`);
-const TELEGRAM_API_TIMEOUT_SECONDS = 15;
-const TELEGRAM_POLL_TIMEOUT_SECONDS = 10;
-const configuredBotId = Number(config.telegram.botToken.split(":", 1)[0]);
-const bot = new Bot(config.telegram.botToken, {
-  client: {
-    timeoutSeconds: TELEGRAM_API_TIMEOUT_SECONDS,
-  },
-  // Avoid a blocking getMe call during startup. grammY will otherwise fetch bot
-  // info before onStart, which can make startup appear frozen when Telegram is
-  // slow/unreachable. The bot id is encoded in the token prefix.
-  botInfo: {
-    id: configuredBotId,
-    is_bot: true,
-    first_name: "a_defect_bot",
-    username: "a_defect_bot",
-    can_join_groups: true,
-    can_read_all_group_messages: false,
-    supports_inline_queries: false,
-    can_connect_to_business: false,
-    has_main_web_app: false,
-    has_topics_enabled: false,
-    allows_users_to_create_topics: false,
-  },
-});
 const agentService = new AiService(config);
+const channel = createLarkChannel({
+  appId: config.feishu.appId,
+  appSecret: config.feishu.appSecret,
+  source: "the-defect-bot",
+  loggerLevel: LoggerLevel.warn,
+  policy: { requireMention: false, dmMode: "open" },
+  outbound: { allowedFileDirs: [config.paths.repoRoot, config.paths.tmpDir], streamInitialText: "思考中…" },
+});
+const controller = new ConversationController({ config, channel, agentService });
 const scheduleEngine = new ScheduleEngine(config, agentService);
-let botUsername: string | null = null;
-let botUserId: number | null = null;
-const pendingAuthorizationCleanup = setInterval(() => {
-  void (async () => {
-    const removed = await pruneExpiredPendingAuthorizationsFromState(config);
-    if (removed <= 0) return;
-    await logger.info(`removed ${removed} expired pending authorizations`);
-  })().catch(async (error) => {
-    await logger.warn(`pending authorization cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
-  });
-}, 60_000);
+const lifecycle = createBotLifecycle({ config, channel, agentService, scheduleEngine, conversationController: controller });
+const chatInfoCache = new Map<string, { title?: string; mode: "p2p" | "group" | "topic" }>();
 
-const conversationController = new ConversationController({
-  config,
-  bot,
-  agentService,
-  isAddressedToBot: (ctx) => isAddressedToBot(ctx, botUsername, botUserId),
-});
-
-const lifecycle = createBotLifecycle({
-  config,
-  bot,
-  agentService,
-  scheduleEngine,
-  conversationController,
-});
-
-bot.use((ctx, next) => unauthorizedGuard(config, ctx, next));
-
-bot.command("new", async (ctx) => {
-  const sessionId = await conversationController.resetSession(ctx);
+async function modelsCard(provider?: string, page = 0): Promise<object> {
+  const { models } = await agentService.listModels();
+  return feishuModelPickerCard(models, currentModel(), provider, page, config.feishu.menuPageSize);
+}
+async function applyModel(key: string): Promise<void> {
+  const { models } = await agentService.listModels();
+  if (!models.includes(key)) throw new Error(`模型不可用：${key}`);
+  await controller.interruptActiveTask("model changed");
+  await agentService.resetSessions();
+  state.model = key;
   await persistState(config.paths.stateFile);
-  await replyFormatted(ctx, tForUser(config, ctx.from?.id, "new_session", { sessionId }));
-});
+}
+async function reply(message: NormalizedMessage, text: string): Promise<void> {
+  await channel.send(message.chatId, { markdown: text }, { replyTo: message.messageId, replyInThread: Boolean(message.threadId) });
+}
 
-bot.command("model", async (ctx) => {
-  if (!isAdminUserId(config, ctx.from?.id)) {
+async function handleCommand(message: NormalizedMessage, command: { name: string; arg: string }): Promise<boolean> {
+  if (command.name === "help" || command.name === "start") { await reply(message, HELP); return true; }
+  if (command.name === "stop") { await controller.interruptActiveTask("stop command", message.chatType === "group" ? `chat:${message.chatId}` : `user:${message.senderId}`); await reply(message, "已中止当前任务。"); return true; }
+  if (command.name === "new") { await controller.resetSession(message); await reply(message, "已开启新的飞书 agent 会话。"); return true; }
+  if (command.name === "quota") { await reply(message, await agentService.quotaText() || "暂时无法获取额度，请稍后再试。"); return true; }
+  if (command.name === "reminders") { await reply(message, await currentRemindersText(config)); return true; }
+  if (command.name === "model") {
+    if (command.arg) { await applyModel(command.arg); await reply(message, `当前 Pi 模型：${command.arg}`); }
+    else await channel.send(message.chatId, { card: await modelsCard() }, { replyTo: message.messageId, replyInThread: Boolean(message.threadId) });
+    return true;
+  }
+  if (message.content.trim().startsWith("/")) { await reply(message, `未知命令：/${command.name}\n\n${HELP}`); return true; }
+  return false;
+}
+
+async function handleMessage(message: NormalizedMessage): Promise<void> {
+  let info = chatInfoCache.get(message.chatId);
+  if (!info) {
+    const fetched = await channel.getChatInfo(message.chatId).catch(() => undefined);
+    const mode = message.chatType === "p2p" ? "p2p" : await channel.getChatMode(message.chatId).catch(() => "group" as const);
+    info = { title: fetched?.name, mode }; chatInfoCache.set(message.chatId, info);
+  }
+  rememberFeishuMessage(config, message, info.title, info.mode);
+  const addressed = isFeishuMessageAddressed(message);
+  if (!addressed) { await controller.stash(message); return; }
+  const command = parseFeishuCommand(message.content);
+  if (command && await handleCommand(message, command)) return;
+  await controller.handleMessage(message);
+}
+
+type FeishuMenuEvent = { event_key?: string; operator?: { operator_id?: { open_id?: string } } };
+async function handleMenuEvent(event: FeishuMenuEvent): Promise<void> {
+  const openId = event.operator?.operator_id?.open_id;
+  const command = parseFeishuMenuEventKey(event.event_key);
+  if (!openId || !command) {
+    await logger.warn(`ignored Feishu menu event key=${JSON.stringify(event.event_key || "")} openId=${JSON.stringify(openId || "")}`);
     return;
   }
-  try {
-    await lifecycle.openModelPicker(ctx);
-  } catch (error) {
-    await logger.warn(`failed to fetch model list: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  await logger.info(`Feishu menu event command=${command} sender=${openId}`);
+  if (command === "new") { await controller.resetUserSession(openId); await channel.send(openId, { markdown: "已开启新的飞书 agent 会话。" }); return; }
+  if (command === "quota") { await channel.send(openId, { markdown: await agentService.quotaText() || "暂时无法获取额度，请稍后再试。" }); return; }
+  if (command === "reminders") { await channel.send(openId, { markdown: await currentRemindersText(config) }); return; }
+  if (command === "model") { await channel.send(openId, { card: await modelsCard() }); return; }
+  if (command === "help" || command === "start") await channel.send(openId, { markdown: HELP });
+}
+
+(channel as unknown as { dispatcher: EventDispatcher }).dispatcher.register({
+  "im.message.recalled_v1": async (event: { message_id?: string }) => controller.handleMessageRecall(event.message_id),
+  "application.bot.menu_v6": async (event: FeishuMenuEvent) => handleMenuEvent(event).catch(async (error) => {
+    const openId = event.operator?.operator_id?.open_id;
+    await logger.error(`Feishu menu event failed key=${JSON.stringify(event.event_key || "")}: ${error instanceof Error ? error.stack || error.message : String(error)}`);
+    if (openId) await channel.send(openId, { markdown: `菜单操作失败：${error instanceof Error ? error.message : String(error)}` }).catch(() => undefined);
+  }),
 });
 
-bot.command("help", async (ctx) => {
-  const userId = ctx.from?.id;
-  const accessLevel = accessLevelForUserId(config, userId);
-  const lines: string[] = ["/help — " + tForUser(config, userId, "command_help"), "/new — " + tForUser(config, userId, "command_new")];
-  if (accessLevel === "admin") lines.push("/model — " + tForUser(config, userId, "command_model"));
-  await replyFormatted(ctx, lines.join("\n"));
+channel.on("message", (message) => { void handleMessage(message).catch(async (error) => {
+  if (isFeishuMessageGoneError(error)) return;
+  await logger.error(`feishu message failed message=${message.messageId}: ${error instanceof Error ? error.stack || error.message : String(error)}`);
+  await reply(message, `错误：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
+}); });
+channel.on("cardAction", (event: CardActionEvent) => {
+  const action = parseFeishuModelAction(event.action.value); if (!action) return;
+  setTimeout(() => void (async () => {
+    if (action.action === "set_model") { await applyModel(action.key); await channel.updateCard(event.messageId, feishuModelSelectedCard(action.key)); }
+    else await channel.updateCard(event.messageId, await modelsCard(action.action === "models" ? action.provider : undefined, action.action === "models" ? action.page : 0));
+  })().catch((error) => logger.warn(`model card action failed: ${error instanceof Error ? error.message : String(error)}`)), 300);
 });
+channel.on("error", (error) => { void logger.error(`feishu channel error: ${error.message}`); });
 
-bot.on("callback_query:data", async (ctx) => {
-  if (!hasUserAccessLevel(config, ctx.from?.id, "trusted")) {
-    await ctx.answerCallbackQuery({ show_alert: true });
-    return;
-  }
-
-  if (await handleModelCallback(ctx, {
-    config,
-    listModels: () => agentService.listModels(),
-    currentModelLabel: () => currentModel(),
-    persistState: () => persistState(config.paths.stateFile),
-    interruptActiveTask: (reason) => conversationController.interruptActiveTask(reason),
-    editMessageTextFormattedSafe: (innerCtx, chatId, messageId, text, options) => conversationController.editMessageTextFormattedSafe(innerCtx, chatId, messageId, text, options),
-  })) {
-    return;
-  }
-
-  await ctx.answerCallbackQuery();
-});
-
-bot.on("message:text", (ctx) => conversationController.handleIncomingText(ctx));
-bot.on("message:document", (ctx) => conversationController.handleIncomingFile(ctx));
-bot.on("message:photo", (ctx) => conversationController.handleIncomingFile(ctx));
-bot.on("message:voice", (ctx) => conversationController.handleIncomingFile(ctx));
-bot.on("message:audio", (ctx) => conversationController.handleIncomingFile(ctx));
-bot.on("message:video", (ctx) => conversationController.handleIncomingFile(ctx));
-bot.on("message:contact", (ctx) => conversationController.handleIncomingContact(ctx));
-
-bot.catch(async (error) => {
-  const message = error.error instanceof Error ? error.error.stack || error.error.message : String(error.error);
-  await logger.error(`unhandled bot error for update ${error.ctx.update.update_id}: ${message}`);
-  try {
-    if (error.ctx.chat?.id) {
-      await logger.warn("reply to user skipped after unhandled bot error");
-    }
-  } catch {
-    // ignore secondary reply failures
-  }
-});
-
-function buildBotCommands(locale: Locale) {
-  const commandKeys = [
-    { command: "help", key: "command_help" },
-    { command: "new", key: "command_new" },
-    { command: "model", key: "command_model" },
-  ] as const;
-
-  return commandKeys.map(({ command, key }) => ({
-    command,
-    description: tForLocale(locale, key),
-  }));
-}
-
-const BOT_COMMAND_SYNC_TIMEOUT_MS = 5_000;
-const BOT_STARTUP_TELEGRAM_TIMEOUT_MS = 5_000;
-
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer) clearTimeout(timer);
-  });
-}
-
-function formatError(error: unknown): string {
-  if (!(error instanceof Error)) return String(error);
-
-  const details: string[] = [error.message];
-  const grammYHttpError = error as Error & { error?: unknown };
-  const wrappedError = grammYHttpError.error;
-  const cause = wrappedError instanceof Error ? wrappedError.cause : undefined;
-  if (cause && typeof cause === "object") {
-    const code = "code" in cause ? String(cause.code) : null;
-    if (code) details.push(`cause=${code}`);
-    const nestedErrors = "errors" in cause && Array.isArray(cause.errors) ? cause.errors : [];
-    const nestedCodes = nestedErrors
-      .map((nested) => (nested && typeof nested === "object" && "code" in nested ? String(nested.code) : null))
-      .filter((code): code is string => Boolean(code));
-    if (nestedCodes.length > 0) details.push(`nested=${[...new Set(nestedCodes)].join(",")}`);
-  }
-  return details.join(" ");
-}
-
-async function logBotCommandState(reason: string): Promise<void> {
-  try {
-    const commands = await bot.api.getMyCommands();
-    const defaultMenuButton = await bot.api.getChatMenuButton();
-    const adminMenuButton = config.telegram.adminUserId
-      ? await bot.api.getChatMenuButton({ chat_id: config.telegram.adminUserId }).catch((error) => ({ error: error instanceof Error ? error.message : String(error) }))
-      : null;
-    await logger.info(`telegram command state reason=${reason} defaultMenuButton=${JSON.stringify(defaultMenuButton)} adminMenuButton=${JSON.stringify(adminMenuButton)} commands=${JSON.stringify(commands.map((command) => command.command))}`);
-  } catch (error) {
-    await logger.warn(`telegram command state unavailable reason=${reason}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-async function syncBotCommands(): Promise<void> {
-  await bot.api.setMyCommands(buildBotCommands(config.bot.language));
-  await bot.api.setChatMenuButton({ menu_button: { type: "commands" } });
-  if (config.telegram.adminUserId) {
-    // Clear any admin chat-specific menu button so the default commands menu is used.
-    await bot.api.setChatMenuButton({ chat_id: config.telegram.adminUserId, menu_button: { type: "default" } });
-  }
-  await logBotCommandState("after sync");
-}
-
-async function syncBotCommandsSafe(reason: string): Promise<void> {
-  try {
-    await withTimeout(syncBotCommands(), BOT_COMMAND_SYNC_TIMEOUT_MS, "sync bot commands");
-  } catch (error) {
-    await logger.warn(`sync bot commands skipped reason=${reason}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-await logger.info("bot starting");
+await logger.info(`bot process starting pid=${process.pid}`);
+await channel.connect();
+await logger.info(`Feishu bot started as ${channel.botIdentity?.name || config.feishu.appId}`);
+await lifecycle.ensureUsableStartupModel();
+await lifecycle.warmAssistantResources();
+const cleanup = await scheduleEngine.prune();
+if (cleanup.removed) await logger.info(`startup pruned ${cleanup.removed} inactive schedules`);
 let scheduleLoop: ScheduleLoopHandle = await lifecycle.startScheduleLoop();
-let maintainerRunner = lifecycle.createMaintainerRunnerWithNotifications();
-const configWatcher = startConfigWatcher(configPath, config, async (_reloadedConfig, result) => {
-  configureLogger(config.paths.logFile);
-  await ensureAdminUserAccessLevel(config);
+let maintainer = lifecycle.createMaintainerRunnerWithoutNotifications();
+const watcher = startConfigWatcher(DEFAULT_CONFIG_PATH, config, async (_next, result) => {
   agentService.reloadConfig(config);
-  if (maintainerRunner.timer) clearInterval(maintainerRunner.timer);
-  maintainerRunner = lifecycle.createMaintainerRunnerWithNotifications();
-  await syncBotCommandsSafe("config reload");
-  if (config.telegram.adminUserId && (result.reloadedKeys.length > 0 || result.restartRequiredKeys.length > 0)) {
-    await logger.info(`config reloaded applied=${result.reloadedKeys.join(",")} restartRequired=${result.restartRequiredKeys.join(",")}`);
-  }
+  if (maintainer.timer) clearInterval(maintainer.timer);
+  maintainer = lifecycle.createMaintainerRunnerWithoutNotifications();
+  if (result.restartRequiredKeys.length) await logger.warn(`restart required for: ${result.restartRequiredKeys.join(", ")}`);
 });
 
-await logger.info("startup phase: start grammY polling");
-try {
-  await logger.info("startup phase: drop pending updates");
-  await withTimeout(bot.api.deleteWebhook({ drop_pending_updates: true }), BOT_STARTUP_TELEGRAM_TIMEOUT_MS, "drop pending updates");
-} catch (error) {
-  await logger.warn(`drop pending updates skipped: ${formatError(error)}`);
+async function shutdown(): Promise<void> {
+  scheduleLoop.stop(); watcher.close(); if (maintainer.timer) clearInterval(maintainer.timer);
+  agentService.stop(); await channel.disconnect();
 }
-
-async function runPostPollingStartupTasks(): Promise<void> {
-  await logger.info("startup phase: sync bot commands");
-  await syncBotCommandsSafe("startup");
-  await logger.info("startup phase: ensure usable startup model");
-  await lifecycle.ensureUsableStartupModel();
-  await lifecycle.warmAssistantResources();
-  await logger.info("startup phase: prune inactive schedules");
-  const inactiveScheduleCleanup = await scheduleEngine.prune();
-  if (inactiveScheduleCleanup.removed > 0) {
-    await logger.info(`startup pruned ${inactiveScheduleCleanup.removed} inactive schedules: ${inactiveScheduleCleanup.removedIds.join(", ")}`);
-  }
-  await logger.info("startup phase: startup greeting queued");
-  void lifecycle.sendStartupGreeting();
-}
-
-const pollingPromise = bot.start({
-  timeout: TELEGRAM_POLL_TIMEOUT_SECONDS,
-  onStart: async (botInfo) => {
-    botUsername = botInfo.username || null;
-    botUserId = botInfo.id;
-    await logger.info(`bot started as @${botInfo.username}`);
-  },
-}).catch(async (error) => {
-  await logger.error(`grammY polling stopped: ${formatError(error)}`);
-});
-await logger.info("startup phase: grammY polling setup running in background");
-await runPostPollingStartupTasks();
-
-function shutdown(): void {
-  scheduleLoop.stop();
-  clearInterval(pendingAuthorizationCleanup);
-  configWatcher.close();
-  if (maintainerRunner.timer) clearInterval(maintainerRunner.timer);
-  agentService.stop();
-  bot.stop();
-  void pollingPromise;
-}
-
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => { void shutdown().finally(() => process.exit(0)); });

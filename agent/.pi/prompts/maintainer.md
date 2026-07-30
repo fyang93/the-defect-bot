@@ -12,7 +12,7 @@ Language: {{language}}
 
 Rules:
 - Return a short user-facing maintenance summary.
-- Do not send Telegram messages.
+- Do not send Feishu messages.
 - Do not change repository state from this composer prompt.
 - Keep memory concise and do not replace canonical operational state with memory.
 - Never mention internal paths, tool names, or logs unless the user asked.

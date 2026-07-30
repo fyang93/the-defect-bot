@@ -23,7 +23,7 @@
       "required": ["targetKind", "targetId"],
       "properties": {
         "targetKind": { "enum": ["user", "chat"] },
-        "targetId": { "type": "integer" }
+        "targetId": { "type": "string", "minLength": 1, "description": "Feishu open_id for user targets or chat_id for chat targets." }
       }
     },
     "TimeOfDay": {
@@ -163,7 +163,6 @@
         "id",
         "title",
         "timeSemantics",
-        "timezone",
         "schedule",
         "reminders",
         "category",
@@ -176,7 +175,7 @@
         "title": { "type": "string", "minLength": 1 },
         "note": { "type": "string" },
         "timeSemantics": { "enum": ["absolute", "local"] },
-        "timezone": { "type": "string", "minLength": 1 },
+        "createdByUserId": { "type": "string", "minLength": 1, "description": "Feishu open_id of the user who created the record." },
         "schedule": { "$ref": "#/$defs/EventSchedule" },
         "reminders": {
           "type": "array",

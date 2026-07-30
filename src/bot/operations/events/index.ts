@@ -36,6 +36,7 @@ export {
 } from "./preparation";
 
 export { ScheduleEngine, type ScheduleEngineDeliverHooks } from "./engine";
+export { currentRemindersText } from "./current";
 export type { ScheduleLoopHandle } from "./coordinator";
 
 export {

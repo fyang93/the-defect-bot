@@ -1,78 +1,40 @@
 # The Defect Bot
 
-[中文说明](README.zh-CN.md)
-
-A local-first Telegram bot for personal memory, files, events, reminders, automations, and lightweight message relay.
-
-It uses Pi SDK for assistant behavior, stores long-term state in local repository files, and treats Telegram as the chat interface rather than the source of truth.
+A local-first Feishu bot backed by the Pi SDK for memory, files, events, reminders, automations, and message relay.
 
 ## Features
 
-- remember and retrieve personal facts
-- organize Telegram-uploaded files for local processing
-- create reminders, events, recurring routines, and automations
-- send immediate or scheduled messages to authorized users and known groups
-- manage user access levels through the bot
+- Direct messages are handled automatically; group messages require an @ mention
+- Text, image, document, audio, and video input
+- Canonical user, chat, event, and runtime state in local `system/` JSON files
+- Durable personal memory under `memory/`
+- Equal capabilities for every Feishu user, including memory, schedules, model selection, and outbound delivery
+- `/help`, `/new`, `/stop`, `/quota`, `/reminders`, and `/model` commands
+- Feishu custom menus for new session, remaining quota, current reminders, and model selection
 
-## Quick start
+## Start
 
 ```bash
-cp config.toml.example config.toml
 just install
-# configure Telegram and Pi model credentials, then:
+cp config.toml.example config.toml
+# Set FEISHU_APP_ID and FEISHU_APP_SECRET in .env
+just agent  # run /login once if agent/.pi/auth.json has no usable model credential
 just serve
 ```
 
-Pi model credentials can be configured in `agent/.pi/auth.json`, `agent/.pi/models.json`, or supported environment variables.
-
-For local assistant debugging:
-
-```bash
-just agent
-```
+Enable the bot and long-connection event subscription in the Feishu app console. Subscribe to message events and `application.bot.menu_v6`, and grant the message, resource-download, delivery, and reaction permissions needed by the bot. Event-type custom menus may use `new_session`, `remaining_quota`, `current_reminders`, and `switch_model` as event keys; menu items that send the Chinese labels are also supported.
 
 ## Configuration
 
-Fill in at least:
+```toml
+[feishu]
+app_id = "${FEISHU_APP_ID}"
+app_secret = "${FEISHU_APP_SECRET}"
+input_merge_window_seconds = 3
+menu_page_size = 8
+```
 
-- `telegram.bot_token`
-- `telegram.admin_user_id`
-- `bot.default_timezone`
-
-Common options:
-
-- `telegram.waiting_message`: initial waiting text; empty disables it
-- `telegram.input_merge_window_seconds`: short merge window for follow-up text/files
-- `telegram.menu_page_size`: Telegram inline menu page size
-- `bot.language`: fixed UI locale, `zh-CN` or `en`
-- `bot.persona_style`: assistant persona hint
-- `maintenance.enabled`: enable idle maintenance
-
-## Telegram setup
-
-- Users who should receive direct bot messages must start a private chat with the bot once.
-- For group usage, disable the bot's **Group Privacy** in BotFather.
-
-## Access levels
-
-- `allowed`: basic chat and low-risk actions in the current linked context
-- `trusted`: memory, files, events, automations, and persistent workflows
-- `admin`: trusted plus role management and temporary authorization grants
-
-## Examples
-
-- “Remember my passport number.”
-- “What is my home address?”
-- “Remind me tomorrow at 9am to submit the application.”
-- “Send this to @someone: dinner is ready.”
-- “Send this to the family group.”
-- “Set @someone to trusted.”
-
-## Commands
-
-- `/help`
-- `/new`
-- `/model` — admin only
+`${VAR}` values are expanded from the project `.env` and process environment.
 
 ## Development
 
@@ -82,4 +44,7 @@ npm test
 npm run test:live
 ```
 
-Engineering guidance lives in `AGENTS.md`; bot assistant workspace details live in `docs/agent-architecture.md`.
+- Runtime: `src/bot/main.ts`
+- Feishu adapters: `src/bot/feishu/**`
+- Deterministic operations: `src/bot/operations/**`
+- Pi workspace: `agent/`
