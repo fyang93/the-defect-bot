@@ -7,7 +7,6 @@ __pycache__/
 dist/
 build/
 node_modules/
-config.toml
 .env
 logs/
 agent/.pi/auth.json

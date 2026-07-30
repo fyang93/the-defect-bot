@@ -5,8 +5,7 @@ input_merge_window_seconds = 3
 menu_page_size = 8
 
 [bot]
-persona_style = "Speak like the Defect from Slay the Spire."
-# Choose "zh-CN" or "en"
+persona_style = "模仿杀戮尖塔里的故障机器人说话。"
 language = "zh-CN"
 default_timezone = "Asia/Tokyo"
 
