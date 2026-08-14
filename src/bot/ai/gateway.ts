@@ -1,5 +1,6 @@
 import path from "node:path";
 import {
+  getAgentDir,
   ModelRegistry,
   ModelRuntime,
   type AgentSession,
@@ -151,17 +152,14 @@ export class AiService {
 
   constructor(config: AppConfig) {
     this.config = config;
-    this.modelRuntimePromise = ModelRuntime.create({
-      authPath: path.join(this.piAgentDir(), "auth.json"),
-      modelsPath: path.join(this.piAgentDir(), "models.json"),
-    }).then((runtime) => {
+    this.modelRuntimePromise = ModelRuntime.create().then((runtime) => {
       this.modelRegistry = new ModelRegistry(runtime);
       return runtime;
     });
     this.sessions = new SessionBroker(
       (scopeKey, scopeLabel) => this.createSession(scopeKey, scopeLabel, "assistant"),
     );
-    this.promptTemplates = new PromptTemplateRenderer(() => this.piAgentDir());
+    this.promptTemplates = new PromptTemplateRenderer(() => this.workspacePiDir());
     this.sessionFactory = new PiSessionFactory({
       config,
       cwd: () => this.agentWorkspaceDir(),
@@ -184,8 +182,12 @@ export class AiService {
     return path.join(this.config.paths.repoRoot, "agent");
   }
 
-  private piAgentDir(): string {
+  private workspacePiDir(): string {
     return path.join(this.agentWorkspaceDir(), ".pi");
+  }
+
+  private piAgentDir(): string {
+    return getAgentDir();
   }
 
   private renderPromptTemplate(name: string, variables: Record<string, unknown>): string {
@@ -211,7 +213,7 @@ export class AiService {
     }
     const available = registry.getAvailable();
     if (available.length === 0) {
-      throw new Error("Pi SDK has no authenticated models available. Configure credentials in agent/.pi/auth.json, environment variables, or agent/.pi/models.json.");
+      throw new Error("Pi SDK has no authenticated models available. Configure credentials with `pi /login`, environment variables, or ~/.pi/agent/models.json.");
     }
     await logger.info(`pi sdk ready ms=${Date.now() - startedAt} models=${available.length}`);
   }

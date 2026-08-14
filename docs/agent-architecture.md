@@ -42,10 +42,13 @@ Feishu `open_id` and `chat_id` values are strings throughout runtime and persist
 
 ## Credentials
 
+The SDK runs with `agent/` as its workspace while using Pi's default global agent directory (`~/.pi/agent`) for credentials and models. Project resources remain under `agent/.pi/` and are discovered from the workspace.
+
 Do not commit local credentials or runtime Pi files:
 
 - `.env`
 - `agent/.pi/auth.json`
 - `agent/.pi/models.json`
+- `agent/.pi/models-store.json`
 - `agent/.pi/sessions/`
 - `agent/.pi/npm/`

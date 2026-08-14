@@ -23,7 +23,7 @@ update-pi:
     [[ "$(cat tmp/.pi-last-update 2>/dev/null || true)" == "$today" ]] && exit 0
     cp package.json tmp/.pi-package.json.bak
     cp package-lock.json tmp/.pi-package-lock.json.bak
-    if (cd agent && PI_CODING_AGENT_DIR=.pi pi update --all) \
+    if (cd agent && pi update --all) \
       && npm install @earendil-works/pi-ai@latest @earendil-works/pi-coding-agent@latest \
       && npm run check && npm test; then
         printf '%s\n' "$today" > tmp/.pi-last-update
@@ -67,7 +67,7 @@ serve:
 
 # Open the project Pi assistant workspace interactively.
 agent:
-    cd agent && PI_CODING_AGENT_DIR=.pi PI_CODING_AGENT_SESSION_DIR=.pi/sessions pi --no-context-files --append-system-prompt "$$(cat AGENTS.md)"
+    cd agent && pi
 
 # Run manual test suite, including live natural-language tests.
 test:

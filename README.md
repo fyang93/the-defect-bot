@@ -18,7 +18,7 @@ A local-first Feishu bot backed by the Pi SDK for memory, files, events, reminde
 just install
 cp config.toml.example config.toml
 # Set FEISHU_APP_ID and FEISHU_APP_SECRET in .env
-just agent  # run /login once if agent/.pi/auth.json has no usable model credential
+just agent  # run /login once if ~/.pi/agent/auth.json has no usable model credential
 just serve
 ```
 
