@@ -1,12 +1,12 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { Module } from "node:module";
 import path from "node:path";
 import {
-  createAgentSession,
-  DefaultResourceLoader,
+  createAgentSessionFromServices,
+  createAgentSessionServices,
   type AgentSession,
+  type AgentSessionServices,
   type ModelRuntime,
-  type ResourceLoader,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -14,24 +14,13 @@ import type { AppConfig } from "bot/app/types";
 import { logger } from "bot/app/logger";
 import type { PiPromptRole } from "./pi-response";
 
-export type CreateSessionOptions = {
-  noContextFiles?: boolean;
-  noSkills?: boolean;
-  toolAllowlist?: string[];
-};
-
 export type PiSessionEntry = {
   sessionId: string;
   session: AgentSession;
 };
 
-type ResourceBundle = {
-  loader: ResourceLoader;
-  settingsManager: SettingsManager;
-};
-
 export class PiSessionFactory {
-  private readonly resourceLoaders = new Map<string, Promise<ResourceBundle>>();
+  private readonly services = new Map<string, Promise<AgentSessionServices>>();
 
   constructor(private readonly deps: {
     config: AppConfig;
@@ -40,53 +29,31 @@ export class PiSessionFactory {
     modelRuntime: () => Promise<ModelRuntime>;
     ensureReady: () => Promise<void>;
     selectedModel: () => any | undefined;
-    systemPromptForRole: (role: PiPromptRole) => string;
     appendSystemPromptForRole: (role: PiPromptRole) => string[];
   }) {}
 
   updateConfig(config: AppConfig): void {
     this.deps.config = config;
-    this.clearResourceLoaders();
+    this.services.clear();
   }
 
-  clearResourceLoaders(): void {
-    this.resourceLoaders.clear();
-  }
-
-  async createSession(scopeKey: string | undefined, scopeLabel: string | undefined, role: PiPromptRole, useTools = role === "assistant", options: CreateSessionOptions = {}): Promise<PiSessionEntry> {
+  async createSession(scopeKey: string | undefined, scopeLabel: string | undefined, role: PiPromptRole): Promise<PiSessionEntry> {
     const startedAt = Date.now();
     await this.deps.ensureReady();
-    const selected = this.deps.selectedModel();
-    const modelRuntime = await this.deps.modelRuntime();
-    const { loader, settingsManager } = await this.getResourceLoader(role, useTools, options);
-    const { session } = await createAgentSession({
-      cwd: this.deps.cwd(),
-      agentDir: this.deps.agentDir(),
-      modelRuntime,
-      model: selected,
-      resourceLoader: loader,
+    const services = await this.getServices(role);
+    const { session } = await createAgentSessionFromServices({
+      services,
+      model: this.deps.selectedModel(),
       sessionManager: SessionManager.inMemory(this.deps.cwd()),
-      settingsManager,
-      noTools: useTools ? undefined : "all",
-      tools: options.toolAllowlist,
     });
     if (scopeLabel?.trim()) session.setSessionName(scopeLabel.trim());
-    const toolNames = options.toolAllowlist?.join(",") || (useTools ? "default" : "none");
-    const activeToolSummary = useTools ? this.summarizeActiveTools(session.getActiveToolNames()) : "none";
-    await logger.info(`pi sdk session created ms=${Date.now() - startedAt} scope=${JSON.stringify(scopeKey || "global")} title=${JSON.stringify(scopeLabel?.trim() || "")} role=${role} tools=${useTools} toolNames=${JSON.stringify(toolNames)} activeTools=${JSON.stringify(activeToolSummary)}`);
+    const activeToolSummary = this.summarizeActiveTools(session.getActiveToolNames());
+    await logger.info(`pi sdk session created ms=${Date.now() - startedAt} scope=${JSON.stringify(scopeKey || "global")} title=${JSON.stringify(scopeLabel?.trim() || "")} role=${role} tools=default activeTools=${JSON.stringify(activeToolSummary)}`);
     return { sessionId: session.sessionId, session };
   }
 
-  private assistantAgentsFile(): { path: string; content: string } | null {
-    const filePath = path.join(this.deps.cwd(), "AGENTS.md");
-    return existsSync(filePath) ? { path: filePath, content: readFileSync(filePath, "utf8") } : null;
-  }
-
-  private getResourceLoader(role: PiPromptRole, useTools: boolean, options: CreateSessionOptions = {}): Promise<ResourceBundle> {
-    const noContextFiles = options.noContextFiles ?? !useTools;
-    const noSkills = options.noSkills ?? !useTools;
-    const key = `${role}:${useTools ? "tools" : "no-tools"}:context=${!noContextFiles}:skills=${!noSkills}`;
-    const cached = this.resourceLoaders.get(key);
+  private getServices(role: PiPromptRole): Promise<AgentSessionServices> {
+    const cached = this.services.get(role);
     if (cached) return cached;
 
     const promise = (async () => {
@@ -97,37 +64,32 @@ export class PiSessionFactory {
         compaction: { enabled: false },
         retry: { enabled: true, maxRetries: 2 },
       });
-      const loader = new DefaultResourceLoader({
+      const services = await createAgentSessionServices({
         cwd: this.deps.cwd(),
         agentDir: this.deps.agentDir(),
+        modelRuntime: await this.deps.modelRuntime(),
         settingsManager,
-        systemPromptOverride: () => this.deps.systemPromptForRole(role),
-        appendSystemPromptOverride: (base) => [...base, ...this.deps.appendSystemPromptForRole(role)],
-        noSkills,
-        noPromptTemplates: true,
-        noContextFiles,
-        agentsFilesOverride: noContextFiles
-          ? undefined
-          : () => {
-              const assistantAgents = this.assistantAgentsFile();
-              return { agentsFiles: assistantAgents ? [assistantAgents] : [] };
-            },
+        resourceLoaderOptions: {
+          appendSystemPromptOverride: (base) => [...base, ...this.deps.appendSystemPromptForRole(role)],
+        },
       });
-      await loader.reload();
-      const extensionResult = loader.getExtensions();
+      const extensionResult = services.resourceLoader.getExtensions();
       const extensions = extensionResult.extensions.length;
-      const skills = loader.getSkills().skills.length;
+      const skills = services.resourceLoader.getSkills().skills.length;
       for (const error of extensionResult.errors) {
         await logger.warn(`pi sdk extension load failed path=${JSON.stringify(error.path)} error=${JSON.stringify(error.error)}`);
       }
-      await logger.info(`pi sdk resources loaded ms=${Date.now() - startedAt} role=${role} tools=${useTools} extensions=${extensions} extensionErrors=${extensionResult.errors.length} skills=${skills}`);
-      return { loader, settingsManager };
+      for (const diagnostic of services.diagnostics) {
+        await logger.warn(`pi sdk resource diagnostic type=${diagnostic.type} message=${JSON.stringify(diagnostic.message)}`);
+      }
+      await logger.info(`pi sdk resources loaded ms=${Date.now() - startedAt} role=${role} mode=default extensions=${extensions} extensionErrors=${extensionResult.errors.length} skills=${skills}`);
+      return services;
     })().catch((error) => {
-      this.resourceLoaders.delete(key);
+      this.services.delete(role);
       throw error;
     });
 
-    this.resourceLoaders.set(key, promise);
+    this.services.set(role, promise);
     return promise;
   }
 

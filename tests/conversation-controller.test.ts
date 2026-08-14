@@ -54,6 +54,63 @@ describe("Feishu conversation controller", () => {
     expect(streamed.at(-1)).toBe("收到");
   });
 
+  test("stops a running turn before downloading and processing the latest message", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "defect-latest-message-")); roots.push(root);
+    const config: AppConfig = { feishu: { appId: "cli", appSecret: "secret", inputMergeWindowSeconds: 0.01, menuPageSize: 8 }, bot: { personaStyle: "", language: "zh-CN", defaultTimezone: "UTC" }, paths: { repoRoot: root, tmpDir: path.join(root, "tmp"), uploadSubdir: "feishu", logFile: path.join(root, "bot.log"), stateFile: path.join(root, "system/state.json") }, maintenance: { enabled: false, idleAfterMs: 0, tmpRetentionDays: 7 } };
+    const order: string[] = [];
+    const get = vi.fn(async (payload: { path: { message_id: string; file_key: string } }) => {
+      order.push(`download:${payload.path.message_id}`);
+      return { getReadableStream: () => Readable.from([Buffer.from(payload.path.file_key)]) };
+    });
+    let startFirst!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { startFirst = resolve; });
+    let finishFirst!: () => void;
+    const firstFinished = new Promise<void>((resolve) => { finishFirst = resolve; });
+    let runCount = 0;
+    let latestInput: Record<string, unknown> | undefined;
+    const agentService = {
+      runAssistantTurn: async (input: Record<string, unknown>) => {
+        runCount += 1;
+        if (runCount === 1) {
+          order.push("run:first");
+          startFirst();
+          await firstFinished;
+          return { message: "旧回复", usedNativeExecution: false, completedActions: [], files: [], attachments: [] };
+        }
+        order.push("run:latest");
+        latestInput = input;
+        return { message: "新回复", usedNativeExecution: false, completedActions: [], files: [], attachments: [] };
+      },
+      abortCurrentSession: async () => { order.push("abort:first"); finishFirst(); return true; },
+      newSession: async () => "session",
+    } as any;
+    const channel = {
+      rawClient: { im: { v1: { messageResource: { get } } } },
+      addReaction: async () => "reaction",
+      removeReaction: async () => undefined,
+      recallMessage: async () => undefined,
+      send: async () => ({ messageId: "reply" }),
+      stream: async (_chatId: string, input: { markdown: (stream: object) => Promise<void> }) => {
+        await input.markdown({ messageId: `waiting-${runCount + 1}`, setContent: async () => undefined, append: async () => undefined });
+        return { messageId: "waiting" };
+      },
+    } as unknown as LarkChannel;
+    const controller = new ConversationController({ config, channel, agentService });
+    const first = { ...message("old", "旧请求", true), rawContentType: "image", resources: [{ type: "image", fileKey: "old-key", fileName: "old.png" }] } satisfies NormalizedMessage;
+    const latest = { ...message("latest", "新请求", true), rawContentType: "image", resources: [{ type: "image", fileKey: "latest-key", fileName: "latest.png" }] } satisfies NormalizedMessage;
+
+    await controller.handleMessage(first);
+    await firstStarted;
+    await controller.handleMessage(latest);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(order.indexOf("abort:first")).toBeLessThan(order.indexOf("download:latest"));
+    expect(order).toContain("run:latest");
+    expect((latestInput?.attachments as unknown[])).toHaveLength(1);
+    expect((latestInput?.uploadedFiles as Array<{ filename: string }>).map((file) => file.filename)).toEqual(["latest-0-latest.png"]);
+    expect(String(latestInput?.userRequestText)).not.toContain("旧请求");
+  });
+
   test("keeps each consecutive image bound to its originating Feishu message", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "defect-consecutive-images-")); roots.push(root);
     const config: AppConfig = { feishu: { appId: "cli", appSecret: "secret", inputMergeWindowSeconds: 0.01, menuPageSize: 8 }, bot: { personaStyle: "", language: "zh-CN", defaultTimezone: "UTC" }, paths: { repoRoot: root, tmpDir: path.join(root, "tmp"), uploadSubdir: "feishu", logFile: path.join(root, "bot.log"), stateFile: path.join(root, "system/state.json") }, maintenance: { enabled: false, idleAfterMs: 0, tmpRetentionDays: 7 } };

@@ -15,32 +15,14 @@ function maintenanceTrigger(force: boolean, idleMs: number, suffix: string): str
 
 const MAINTENANCE_TICK_MS = 60 * 1000;
 
-async function buildMaintenanceRequest(repoRoot: string, lastMaintainedAt: string | null, changedFiles: string[]): Promise<string> {
-  const draft = [
-    "Idle memory maintainer pass.",
+function buildMaintenanceRequest(lastMaintainedAt: string | null, changedFiles: string[]): string {
+  return [
+    "Load and follow the memory-maintenance skill.",
     lastMaintainedAt ? `Last maintainer pass: ${lastMaintainedAt}` : "Last maintainer pass: none",
     changedFiles.length > 0
-      ? `Files changed since last maintainer pass:\n${changedFiles.map((filePath) => `- ${filePath}`).join("\n")}`
-      : "Files changed since last maintainer pass: none",
-    "Focus on changed files first. Inspect other memory files only if needed for merging or consistency.",
-    "Apply the repository memory taxonomy when reorganizing notes by scope first: single-person material belongs under memory/people/<slug>/README.md and that person's directory; multi-person shared material belongs under memory/shared/<owner-type>/<slug>/...; repository-wide reference material belongs under memory/common/ by topic.",
-    "This repository is multi-user: person-specific notes should be filed under the correct person's area instead of broad top-level memory files.",
-    "If a stable user-to-person link became available after earlier provisional notes were created, consolidate those provisional notes into the linked canonical person location.",
-    "Do not preserve duplicate person files when one is only a provisional display-name-based note and the canonical person mapping is now known.",
-    "Do not impose a fixed frontmatter schema on memory notes unless some concrete code path actually depends on it.",
-    "Prefer moving obviously misfiled notes into the right bucket and updating links over leaving duplicate copies.",
-    "Reply with a short summary of repository changes, or say no change.",
-  ].filter(Boolean).join("\n\n");
-
-  void repoRoot;
-  return draft;
-}
-
-function detailPreview(items: string[], maxItems = 5): string {
-  if (items.length === 0) return "";
-  const visible = items.slice(0, maxItems).join("，");
-  const remaining = items.length - Math.min(items.length, maxItems);
-  return remaining > 0 ? `${visible}，以及另外 ${remaining} 项` : visible;
+      ? `Repository-root-relative files changed since then:\n${changedFiles.map((filePath) => `- ${filePath}`).join("\n")}`
+      : "Files changed since then: none",
+  ].join("\n\n");
 }
 
 async function notifyMaintenanceChanges(
@@ -134,12 +116,9 @@ async function runMaintainerCycle(
   const idleMs = lastActivityAt ? Date.now() - new Date(lastActivityAt).getTime() : Number.POSITIVE_INFINITY;
   if (!force && (!Number.isFinite(idleMs) || idleMs < config.maintenance.idleAfterMs)) return;
 
-  const preChanges: string[] = [];
-
   const scheduleCleanup = await new ScheduleEngine(config, agentService).prune();
   if (scheduleCleanup.removed > 0) {
     await logger.info(`maintainer loop pruned ${scheduleCleanup.removed} inactive schedules`);
-    preChanges.push(`Removed ${scheduleCleanup.removed} inactive schedules: ${detailPreview(scheduleCleanup.removedSummaries)}.`);
     await appendMaintenanceLogSection(config, new Date().toISOString(), maintenanceTrigger(force, idleMs, "schedule cleanup"), {
       summary: `pruned ${scheduleCleanup.removed} inactive schedules`,
       deleted: scheduleCleanup.removedSummaries.join(", "),
@@ -150,7 +129,6 @@ async function runMaintainerCycle(
   if (removedTmpEntries.length > 0) {
     const removedTmpPaths = removedTmpEntries.map((item) => path.join(path.relative(config.paths.repoRoot, config.paths.tmpDir), item));
     await logger.info(`maintainer loop cleared ${removedTmpEntries.length} tmp entries olderThanDays=${config.maintenance.tmpRetentionDays}`);
-    preChanges.push(`Cleared ${removedTmpEntries.length} tmp entries older than ${config.maintenance.tmpRetentionDays} days: ${detailPreview(removedTmpPaths)}.`);
     await appendMaintenanceLogSection(config, new Date().toISOString(), maintenanceTrigger(force, idleMs, "tmp cleanup"), {
       summary: `cleared ${removedTmpEntries.length} tmp entries older than ${config.maintenance.tmpRetentionDays} day(s)`,
       deleted: removedTmpPaths.join(", "),
@@ -167,7 +145,7 @@ async function runMaintainerCycle(
   const startedAt = new Date().toISOString();
   try {
     await logger.info(`maintainer loop starting${force ? " (forced)" : ""} after ${Number.isFinite(idleMs) ? `${idleMs}ms` : "unknown"} idle changedFiles=${changedFiles.length}`);
-    const request = await buildMaintenanceRequest(config.paths.repoRoot, force ? null : state.lastMaintainedAt, changedFiles);
+    const request = buildMaintenanceRequest(force ? null : state.lastMaintainedAt, changedFiles);
     const summary = await agentService.runMaintenancePass(request);
     const afterSnapshot = await memorySnapshot(config.paths.repoRoot);
     const changes = diffSnapshots(beforeSnapshot, afterSnapshot);

@@ -42,6 +42,23 @@ export class SessionBroker<TSession extends { abort: () => Promise<unknown>; dis
     return created;
   }
 
+  async abort(scopeKey?: string): Promise<boolean> {
+    const entry = this.sessions.get(this.key(scopeKey));
+    if (!entry) return false;
+    await entry.session.abort();
+    entry.lastUsedAt = Date.now();
+    return true;
+  }
+
+  async forEachSession(visitor: (session: TSession) => Promise<void> | void): Promise<number> {
+    const entries = [...this.sessions.values()];
+    await Promise.all(entries.map(async (entry) => {
+      await visitor(entry.session);
+      entry.lastUsedAt = Date.now();
+    }));
+    return entries.length;
+  }
+
   async dispose(scopeKey?: string): Promise<boolean> {
     const key = this.key(scopeKey);
     const entry = this.sessions.get(key);

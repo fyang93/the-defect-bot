@@ -165,7 +165,7 @@ const feishuSendFile = tool(
 const userAddAlias = tool(
   "user_add_alias",
   "Add User Alias",
-  "Persist a learned canonical alias for a Feishu user id. Use after resolving or after user clarification.",
+  "Persist a learned human-readable name, nickname, or handle for a Feishu user. Never pass a machine identifier (user/open/union/chat ID or another opaque value) as an alias.",
   Type.Object({ requesterUserId: Type.String(), userId: Type.String(), alias: Type.String() }),
   "user_add_alias",
 );
@@ -173,7 +173,7 @@ const userAddAlias = tool(
 const userRecordPerson = tool(
   "user_record_person",
   "Record User Person Memory",
-  "Create or update a memory/people README for a Feishu user, record durable facts there, and link system/users.json personPath. Use this when a user explicitly asks to remember facts, including account/login details. Trust the returned receipt; do not read the file just to verify.",
+  "Create or update a memory/people README for a Feishu user, record durable facts there, and link system/users.json personPath. Names and aliases must be human-readable names, nicknames, or handles, never machine identifiers. Use this when a user explicitly asks to remember facts, including account/login details. Trust the returned receipt; do not read the file just to verify.",
   Type.Object({ requesterUserId: Type.String(), userId: Type.String(), name: Type.Optional(Type.String()), aliases: Type.Optional(Type.Array(Type.String())), facts: Type.Optional(Type.Array(Type.String())), personPath: Type.Optional(Type.String()) }),
   "user_record_person",
 );
@@ -194,15 +194,6 @@ const userSetPersonPath = tool(
   "user_set_person_path",
 );
 
-const userUpdateRules = tool(
-  "user_update_rules",
-  "Update User Rules",
-  "Add and/or remove durable future-facing assistant rules for a user. To edit a rule, remove the old text and add the new text in one call.",
-  Type.Object({ requesterUserId: Type.String(), userId: Type.Optional(Type.String()), add: Type.Optional(Type.Array(Type.String())), remove: Type.Optional(Type.Array(Type.String())) }),
-  "user_update_rules",
-);
-
-
 export default function defectBotTools(pi: any) {
   for (const item of [
     eventList,
@@ -219,7 +210,6 @@ export default function defectBotTools(pi: any) {
     userRecordPerson,
     userSetTimezone,
     userSetPersonPath,
-    userUpdateRules,
   ]) {
     pi.registerTool(item);
   }

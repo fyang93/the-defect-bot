@@ -82,24 +82,31 @@ export class ConversationController {
 
   async handleMessage(message: NormalizedMessage): Promise<void> {
     touchActivity();
+    const currentScope = scope(message);
+    const existing = this.turns.get(currentScope.key);
+    const coalescedInput = existing
+      && existing.phase === "collecting"
+      && existing.task.userId === message.senderId
+      && Date.now() - existing.updatedAt <= this.deps.config.feishu.inputMergeWindowSeconds * 1000
+      ? existing.input
+      : undefined;
+    if (existing) {
+      await this.interruptActiveTask(
+        coalescedInput ? `coalescing follow-up ${message.messageId}` : `replaced by latest message ${message.messageId}`,
+        currentScope.key,
+      );
+    }
     const [saved, replyContext] = await Promise.all([
       message.resources.length ? saveFeishuResources(this.deps.channel, this.deps.config, message) : Promise.resolve({ files: [], attachments: [] }),
       fetchFeishuReplyContext(this.deps.channel, message).catch(() => ""),
     ]);
-    const currentScope = scope(message);
     const prior = this.takeBuffered(message);
     const contextText = bufferedFeishuText(prior);
     let input: Input = {
       text: [contextText, replyContext, "Current user message:", message.content.trim() || "用户上传了一个附件。"].filter(Boolean).join("\n\n"),
       files: [...prior.flatMap((item) => item.input.files), ...saved.files], attachments: [...prior.flatMap((item) => item.input.attachments), ...saved.attachments], messageTime: referenceTime(message),
     };
-    const existing = this.turns.get(currentScope.key);
-    if (existing && existing.task.userId === message.senderId && Date.now() - existing.updatedAt <= this.deps.config.feishu.inputMergeWindowSeconds * 1000) {
-      input = merge(existing.input, input);
-      await this.interruptActiveTask(`merged follow-up ${message.messageId}`, currentScope.key);
-    } else if (existing) {
-      await this.interruptActiveTask(`new message ${message.messageId}`, currentScope.key);
-    }
+    if (coalescedInput) input = merge(coalescedInput, input);
     const task: ActiveConversationTask = { id: this.nextTaskId++, userId: message.senderId, scopeKey: currentScope.key, scopeLabel: currentScope.label, chatId: message.chatId, sourceMessageId: message.messageId, cancelled: false };
     const turn: Turn = { task, message, input, phase: "collecting", updatedAt: Date.now() };
     this.turns.set(currentScope.key, turn);
@@ -130,6 +137,7 @@ export class ConversationController {
       await logger.info(`skipped withdrawn or deleted Feishu message ${turn.message.messageId}`);
       return;
     }
+    await logger.info(`assistant task ${turn.task.id} starting scope=${JSON.stringify(scopeKey)} message=${turn.message.messageId} resources=${turn.message.resources.length} files=${turn.input.files.length} images=${turn.input.attachments.length}`);
     await runAssistantTask({
       config: this.deps.config, channel: this.deps.channel, message: turn.message, task: turn.task, promptText: turn.input.text,
       uploadedFiles: turn.input.files, attachments: turn.input.attachments, messageTime: turn.input.messageTime, agentService: this.deps.agentService,

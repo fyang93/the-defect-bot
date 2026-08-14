@@ -97,7 +97,8 @@ function titleMatches(event: EventRecord, match: Record<string, unknown>): boole
 }
 
 function idMatches(event: EventRecord, match: Record<string, unknown>): boolean {
-  const id = typeof match.id === "string" && match.id.trim() ? match.id.trim() : "";
+  const rawId = match.id ?? match.eventId;
+  const id = typeof rawId === "string" && rawId.trim() ? rawId.trim() : "";
   if (id && event.id !== id) return false;
   return true;
 }
@@ -163,13 +164,20 @@ async function resolveEventsForMutation(
   allowedStatuses: EventRecord["status"][] = ["active"],
 ): Promise<{ mode: "single" | "batch"; events: EventRecord[]; reason?: string }> {
   const payload = task.payload;
-  return resolveEventsByMatch(config, {
-    match: payload.match && typeof payload.match === "object" && !Array.isArray(payload.match)
-      ? payload.match as Record<string, unknown>
-      : {},
+  const match = payload.match && typeof payload.match === "object" && !Array.isArray(payload.match)
+    ? payload.match as Record<string, unknown>
+    : {};
+  const supportedKeys = new Set(["id", "eventId", "ids", "title", "titleContains", "scheduledDate", "scheduledAt", "timeframe"]);
+  if (Object.keys(match).length === 0 || Object.keys(match).some((key) => !supportedKeys.has(key))) {
+    return { mode: "single", events: [], reason: "invalid-schedule-match" };
+  }
+  const resolved = await resolveEventsByMatch(config, {
+    match,
     requesterUserId: task.source?.requesterUserId,
     allowedStatuses,
   });
+  if (resolved.mode === "single" && resolved.events.length !== 1) return { ...resolved, events: [] };
+  return resolved;
 }
 
 export async function runEventTask(config: AppConfig, task: TaskRecord): Promise<{ changed?: boolean; eventId?: string; eventIds?: string[]; skipped?: boolean; reason?: string }> {

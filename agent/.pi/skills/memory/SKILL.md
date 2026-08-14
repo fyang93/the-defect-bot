@@ -37,10 +37,14 @@ Use neighboring skills instead when the task is mainly about:
 - Store user-specific memory under the correct owner path rather than top-level `memory/`.
 - If no `personPath` is linked yet, a small provisional person note is acceptable.
 - Merge into an existing note when it clearly fits; otherwise create a focused new note.
+- When recording person information, prefer the person's pinyin as the Markdown filename when practical.
+- After recording or updating memory, tell the user which file was edited and what changed.
 - Keep notes short, single-purpose, and easy to scan.
 - Prefer bullet facts over long prose.
 - Frontmatter is optional; do not invent rigid schemas.
 - If new information conflicts with an existing note and replacement is unclear, ask.
+- Treat a direct personal-fact disclosure as an implicit request to remember it when the conversational context makes that intent clear; do not require the exact phrase “记住” or “remember”.
+- For sensitive personal facts, save them when that intent is clear, while avoiding unnecessary repetition in the reply.
 - Do not turn every appointment or date into memory.
 - Do not claim something was saved, moved, merged, linked, or persisted unless the repository was actually updated.
 - When ownership becomes clearer later, prefer cleanup that consolidates provisional notes into the canonical owner path.
@@ -62,7 +66,5 @@ File handling:
 
 Sensitive data:
 
-- Persisted data may enter AI context.
 - Never store API keys, private keys, recovery codes, seed phrases, session tokens, 2FA backup codes, or CVV.
 - Store passwords only if the user explicitly asks.
-- For other sensitive values, warn briefly and confirm unless the user already clearly asked to store them.

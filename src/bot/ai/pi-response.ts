@@ -33,26 +33,6 @@ export function assistantErrorFromMessages(messages: unknown[]): string | null {
   return null;
 }
 
-export function summarizeExecutionParts(parts: unknown): ExecutionSummary[] {
-  if (!Array.isArray(parts)) return [];
-  return parts.flatMap((part) => {
-    if (!part || typeof part !== "object") return [];
-    const record = part as Record<string, unknown>;
-    if (record.type !== "tool" && record.type !== "toolCall") return [];
-    const tool = typeof record.tool === "string" ? record.tool.trim() : typeof record.name === "string" ? record.name.trim() : "";
-    const stateRecord = record.state && typeof record.state === "object" ? record.state as Record<string, unknown> : null;
-    const status = stateRecord && typeof stateRecord.status === "string" ? stateRecord.status.trim() : "unknown";
-    const input = stateRecord?.input;
-    const output = stateRecord?.output;
-    return [{
-      tool,
-      status,
-      inputChars: typeof input === "string" ? input.length : JSON.stringify(input || "").length,
-      outputChars: typeof output === "string" ? output.length : JSON.stringify(output || "").length,
-    }];
-  });
-}
-
 export function summarizeToolResults(messages: unknown): ExecutionSummary[] {
   if (!Array.isArray(messages)) return [];
   return messages.flatMap((message) => {
@@ -84,11 +64,4 @@ export function summarizeMessagesForDebug(messages: unknown[]): MessageDebugSumm
       textChars: extractText(message).length,
     };
   });
-}
-
-export function ensureNoToolExecution(role: PiPromptRole | undefined, parts: unknown): void {
-  if (!role || role === "assistant") return;
-  const executionParts = summarizeExecutionParts(parts);
-  if (executionParts.length === 0) return;
-  throw new Error(`${role} text generation must not execute tools`);
 }

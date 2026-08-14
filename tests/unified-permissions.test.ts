@@ -39,4 +39,26 @@ describe("unified user capabilities", () => {
     expect(resolved.events).toHaveLength(1);
     expect(resolved.events[0].createdByUserId).toBe("ou_a");
   });
+
+  test("mutations accept eventId and reject unsafe matches", async () => {
+    const app = config();
+    await runEventTask(app, task("ou_a", "生日提醒", "ou_a"));
+    await runEventTask(app, task("ou_a", "生日提醒", "ou_a"));
+    const [first] = await readEventRecords(app);
+    const update = (match: Record<string, unknown>, title: string): TaskRecord => ({
+      id: `update-${title}`,
+      state: "queued",
+      domain: "events",
+      operation: "update",
+      payload: { match, changes: { title } },
+      source: { requesterUserId: "ou_a" },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    expect((await runEventTask(app, update({ typoId: first.id }, "不应写入"))).reason).toBe("invalid-schedule-match");
+    expect((await runEventTask(app, update({ title: "生日提醒" }, "也不应写入"))).reason).toBe("schedule-ambiguous");
+    expect((await runEventTask(app, update({ eventId: first.id }, "正确姓名"))).changed).toBe(true);
+    expect((await readEventRecords(app)).map((event) => event.title)).toEqual(["正确姓名", "生日提醒"]);
+  });
 });

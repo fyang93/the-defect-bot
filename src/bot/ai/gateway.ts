@@ -8,15 +8,15 @@ import type { AppConfig, AiAttachment, UploadedFile } from "bot/app/types";
 import { logger } from "bot/app/logger";
 import { formatIsoInTimezoneParts } from "bot/app/time";
 import { state, touchActivity } from "bot/app/state";
-import { buildPersonaStyleLines, buildProjectSystemPrompt, type RequestPermissionMode } from "./prompt";
+import { buildPersonaStyleLines, type RequestPermissionMode } from "./prompt";
 import { extractAiTurnResultFromText, isDisplayableUserText } from "./response";
 import type { AiTurnResult, AssistantPlanResult, AssistantProgressHandler, AssistantTextDeltaHandler, ReminderTextContext } from "./types";
 import { ReplyComposer, type ReplyComposerInputContext } from "./reply-composer";
 import { StructuredReasoner } from "./structured-reasoner";
 import { PromptTemplateRenderer } from "./prompt-templates";
-import { assistantErrorFromMessages, ensureNoToolExecution, extractAssistantText, summarizeMessagesForDebug, summarizeToolResults, type PiPromptRole } from "./pi-response";
+import { assistantErrorFromMessages, extractAssistantText, summarizeMessagesForDebug, summarizeToolResults, type PiPromptRole } from "./pi-response";
 import { SessionBroker, type SessionBrokerEntry } from "./session-broker";
-import { PiSessionFactory, type CreateSessionOptions } from "./pi-session-factory";
+import { PiSessionFactory } from "./pi-session-factory";
 import { quotaText } from "./quota";
 
 export type { AiTurnResult } from "./types";
@@ -33,8 +33,6 @@ type AttachmentCapabilityCache = {
 
 const MODEL_CAPABILITY_CACHE_MS = 60_000;
 const MODEL_REGISTRY_REFRESH_CACHE_MS = 60_000;
-const COMPOSER_WEB_TOOLS = ["web_search", "fetch_content", "get_search_content"];
-
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? value as Record<string, unknown> : undefined;
 }
@@ -161,7 +159,7 @@ export class AiService {
       return runtime;
     });
     this.sessions = new SessionBroker(
-      (scopeKey, scopeLabel) => this.createSession(scopeKey, scopeLabel, "assistant", true),
+      (scopeKey, scopeLabel) => this.createSession(scopeKey, scopeLabel, "assistant"),
     );
     this.promptTemplates = new PromptTemplateRenderer(() => this.piAgentDir());
     this.sessionFactory = new PiSessionFactory({
@@ -171,7 +169,6 @@ export class AiService {
       modelRuntime: () => this.modelRuntimePromise,
       ensureReady: () => this.ensureReady(),
       selectedModel: () => this.selectedModel(),
-      systemPromptForRole: (role) => this.systemPromptForRole(role),
       appendSystemPromptForRole: (role) => this.appendSystemPromptForRole(role),
     });
     this.replyComposer = new ReplyComposer(
@@ -220,7 +217,7 @@ export class AiService {
   }
 
   async warmAssistantResources(): Promise<void> {
-    const entry = await this.createSession(undefined, "Warm assistant resources", "assistant", true);
+    const entry = await this.createSession(undefined, "Warm assistant resources", "assistant");
     await entry.session.abort().catch(() => {});
     entry.session.dispose();
     await logger.info("pi sdk assistant resources warmed");
@@ -236,11 +233,11 @@ export class AiService {
     return parsed ? this.modelRegistry?.find(parsed.providerID, parsed.modelID) : undefined;
   }
 
-  private async createSession(scopeKey: string | undefined, scopeLabel: string | undefined, role: PromptRole, useTools = role === "assistant", options: CreateSessionOptions = {}): Promise<SessionEntry> {
+  private async createSession(scopeKey: string | undefined, scopeLabel: string | undefined, role: PromptRole): Promise<SessionEntry> {
     if (state.model && !this.selectedModel()) {
       throw new Error(`Selected model is unavailable: ${state.model}`);
     }
-    return this.sessionFactory.createSession(scopeKey, scopeLabel, role, useTools, options);
+    return this.sessionFactory.createSession(scopeKey, scopeLabel, role);
   }
 
   private async getOrCreateSession(scopeKey?: string, scopeLabel?: string): Promise<SessionEntry> {
@@ -258,9 +255,9 @@ export class AiService {
   }
 
   async abortCurrentSession(scopeKey?: string, scopeLabel?: string): Promise<boolean> {
-    const aborted = await this.disposeSession(scopeKey);
+    const aborted = await this.sessions.abort(scopeKey);
     if (aborted) {
-      await logger.warn(`aborted pi sdk session${scopeLabel ? ` for ${scopeLabel}` : ""}`);
+      await logger.warn(`aborted active pi sdk turn${scopeLabel ? ` for ${scopeLabel}` : ""}; session context retained`);
       touchActivity();
     }
     return aborted;
@@ -277,6 +274,21 @@ export class AiService {
     const current = this.selectedModel() || registry.getAvailable()[0];
     const defaults = current ? { [current.provider]: current.id } : {};
     return { defaults, models };
+  }
+
+  async switchModel(key: string): Promise<number> {
+    const parsed = parseModel(key);
+    if (!parsed) throw new Error(`Invalid model key: ${key}`);
+    await this.ensureReady();
+    const model = this.requireModelRegistry().find(parsed.providerID, parsed.modelID);
+    if (!model) throw new Error(`Selected model is unavailable: ${key}`);
+    const updated = await this.sessions.forEachSession(async (session) => {
+      if (session.isStreaming) await session.abort();
+      await session.setModel(model);
+    });
+    this.attachmentCapabilityCache = null;
+    await logger.info(`pi sdk model switched model=${JSON.stringify(key)} retainedSessions=${updated}`);
+    return updated;
   }
 
   private async selectedModelSupportsAttachments(): Promise<boolean> {
@@ -352,11 +364,7 @@ export class AiService {
   }
 
   async runMaintenancePass(request: string): Promise<string> {
-    const rendered = this.renderPromptTemplate("maintainer", {
-      context: request.trim(),
-      language: this.config.bot.language,
-    });
-    return (await this.promptInTemporaryTextSession(rendered, "maintainer")).trim();
+    return (await this.promptInTemporaryTextSession(request.trim(), "maintainer")).trim();
   }
 
   async runAssistantTurn(input: {
@@ -479,10 +487,6 @@ export class AiService {
     return images;
   }
 
-  private systemPromptForRole(role: PromptRole): string {
-    return buildProjectSystemPrompt(role);
-  }
-
   private appendSystemPromptForRole(role: PromptRole): string[] {
     const label = role === "maintainer" ? "Summary style" : role === "writer" ? "Reply style" : "Style";
     const lines = buildPersonaStyleLines(this.config.bot.personaStyle, { label });
@@ -493,7 +497,6 @@ export class AiService {
     return this.promptInDisposableTextSession({
       title: "Maintainer",
       role,
-      useTools: false,
       requestLog: `pi sdk ${role} text prompt request`,
       rawLogLabel: `pi sdk ${role} text prompt`,
       execute: (session) => this.promptSessionForText(session, text, [], role),
@@ -504,12 +507,6 @@ export class AiService {
     return this.promptInDisposableTextSession({
       title: "Composer web",
       role: "writer",
-      useTools: true,
-      sessionOptions: {
-        noContextFiles: true,
-        noSkills: true,
-        toolAllowlist: COMPOSER_WEB_TOOLS,
-      },
       requestLog: "pi sdk composer web prompt request",
       rawLogLabel: "pi sdk composer web prompt",
       execute: async (session) => {
@@ -524,8 +521,6 @@ export class AiService {
               ].join("\n");
           const response = await this.promptSessionForAgent(session, attemptText, [], "assistant");
           const rawText = response.rawText.trim();
-          const forbiddenActions = response.completedActions.filter((name) => !COMPOSER_WEB_TOOLS.includes(name));
-          if (forbiddenActions.length > 0) throw new Error(`composer web session executed forbidden tools: ${forbiddenActions.join(", ")}`);
           if (rawText && isDisplayableUserText(rawText)) return rawText;
           await logger.warn(`discarded composer web output attempt=${attempt} reason=${rawText ? "non-displayable" : "empty-output"}`);
         }
@@ -548,7 +543,6 @@ export class AiService {
     return this.promptInDisposableTextSession({
       title: "Light text",
       role: role || "writer",
-      useTools: role === "assistant",
       requestLog: "pi sdk light text prompt request",
       rawLogLabel: "pi sdk light text prompt",
       execute: (session) => this.promptSessionForLightText(session, text, [], role),
@@ -558,13 +552,11 @@ export class AiService {
   private async promptInDisposableTextSession(input: {
     title: string;
     role: PromptRole;
-    useTools: boolean;
-    sessionOptions?: CreateSessionOptions;
     requestLog: string;
     rawLogLabel: string;
     execute: (session: AgentSession) => Promise<string>;
   }): Promise<string> {
-    const session = await this.createSession(undefined, input.title, input.role, input.useTools, input.sessionOptions);
+    const session = await this.createSession(undefined, input.title, input.role);
     try {
       await logger.info(input.requestLog);
       const rawText = await input.execute(session.session);
@@ -579,34 +571,16 @@ export class AiService {
 
   private async promptAssistantTurn(text: string, attachments: AiAttachment[], scopeKey?: string): Promise<AiTurnResult> {
     const entry = await this.getOrCreateSession(scopeKey, scopeKey);
-
     for (let attempt = 1; attempt <= 2; attempt += 1) {
-      const promptText = attempt === 1
-        ? text
-        : [
-            text,
-            "",
-            "Your previous output was invalid.",
-            "Return a displayable user-visible reply text for this turn.",
-          ].join("\n");
-
-      let rawText = "";
+      const promptText = attempt === 1 ? text : `${text}\n\nYour previous output was invalid. Return a displayable user-visible reply text for this turn.`;
       try {
-        await logger.info(attempt === 1 ? "pi sdk prompt request" : "pi sdk prompt retry request");
-        rawText = await this.promptSessionForLightText(entry.session, promptText, attachments, "assistant");
+        const rawText = await this.promptSessionForLightText(entry.session, promptText, attachments, "assistant");
         this.sessions.touch(scopeKey);
+        touchActivity();
+        const parsed = extractAiTurnResultFromText(rawText);
+        if (parsed.message.trim() && isDisplayableUserText(parsed.message)) return parsed;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (/no text output/i.test(message) && attempt < 2) {
-          await logger.warn(`discarded assistant output attempt=${attempt} reason=empty-output`);
-          continue;
-        }
-        throw error;
-      }
-      touchActivity();
-      const parsed = extractAiTurnResultFromText(rawText);
-      if (parsed.message.trim() && isDisplayableUserText(parsed.message)) {
-        return parsed;
+        if (!/no text output/i.test(error instanceof Error ? error.message : String(error)) || attempt === 2) throw error;
       }
       await logger.warn(`discarded assistant output attempt=${attempt} reason=non-displayable`);
     }
@@ -651,7 +625,6 @@ export class AiService {
     const startedAt = Date.now();
     await logger.info(`pi sdk text prompt start sessionId=${session.sessionId} model=${JSON.stringify(state.model || "default")} textChars=${text.length} attachments=${promptAttachments.length} mode=light${role ? ` role=${role}` : ""}`);
     const result = await this.runPiPrompt(session, text, promptAttachments, role === "assistant");
-    ensureNoToolExecution(role, result.newMessages.flatMap((message: any) => Array.isArray(message?.content) ? message.content : []));
     const rawText = result.rawText.trim();
     await logger.info(`pi sdk text prompt response ms=${Date.now() - startedAt} sessionId=${session.sessionId} rawChars=${rawText.length} messages=${result.newMessages.length} mode=light`);
     if (!rawText) {
@@ -701,10 +674,6 @@ export class AiService {
   }
 
   private attachmentLogSummary(attachments: AiAttachment[]): Array<{ mimeType: string; filename?: string; urlScheme: string }> {
-    return attachments.map((attachment) => ({
-      mimeType: attachment.mimeType,
-      filename: attachment.filename,
-      urlScheme: attachment.url.startsWith("data:") ? "data" : attachment.url.startsWith("http") ? "http" : "other",
-    }));
+    return attachments.map(({ mimeType, filename, url }) => ({ mimeType, filename, urlScheme: url.startsWith("data:") ? "data" : url.startsWith("http") ? "http" : "other" }));
   }
 }

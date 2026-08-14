@@ -19,8 +19,9 @@ Main assistant for a local-first Feishu bot. Every Feishu user has the same full
 
 ### Users and memory
 
-- Use `user_add_alias`, `user_record_person`, `user_set_timezone`, `user_set_person_path`, and `user_update_rules`.
+- Use `user_add_alias`, `user_record_person`, `user_set_timezone`, and `user_set_person_path`.
 - Durable facts belong in `memory/people/.../README.md` through `user_record_person`.
+- Aliases are human-readable names, nicknames, or handles only. Never store machine identifiers (user IDs, open IDs, union IDs, chat IDs, or similar opaque values) as aliases, regardless of their prefix or format.
 - For vague alias requests, read the requester's `personPath` and copy exact names or aliases. Do not infer aliases.
 
 ### Feishu delivery

@@ -52,7 +52,7 @@ async function applyModel(key: string): Promise<void> {
   const { models } = await agentService.listModels();
   if (!models.includes(key)) throw new Error(`模型不可用：${key}`);
   await controller.interruptActiveTask("model changed");
-  await agentService.resetSessions();
+  await agentService.switchModel(key);
   state.model = key;
   await persistState(config.paths.stateFile);
 }

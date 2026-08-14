@@ -50,8 +50,9 @@ export async function handleUsersUpdateRules(context: ToolContext): Promise<void
 
 export async function handleUsersRecordPerson(context: ToolContext): Promise<void> {
   const id = effectiveId(context); const previous = resolveUser(context.config.paths.repoRoot, id) || {};
-  const aliases = list(context.args.aliases); const facts = list(context.args.facts);
-  const name = context.cleanText(context.args.name) || aliases[0] || previous.displayName || id;
+  const requestedAliases = list(context.args.aliases); const facts = list(context.args.facts);
+  const requestedName = context.cleanText(context.args.name);
+  const name = requestedName || requestedAliases[0] || previous.displayName || id;
   const personPath = context.cleanText(context.args.personPath) || previous.personPath || `memory/people/${slug(name, `user-${id}`)}/README.md`;
   if (path.isAbsolute(personPath) || !/^memory\/people\/(?:.+\/)?README\.md$/i.test(personPath)) context.output({ ok: false, error: "invalid-personPath" });
   const absolutePath = path.join(context.config.paths.repoRoot, personPath);
@@ -61,7 +62,7 @@ export async function handleUsersRecordPerson(context: ToolContext): Promise<voi
   const missing = facts.filter((fact) => !existingFacts.has(fact));
   const markdown = missing.length ? `${existing.trimEnd()}${existing.includes("\n## Facts") ? "" : "\n\n## Facts"}\n${missing.map((fact) => `- ${fact}`).join("\n")}\n` : existing;
   writeFileSync(absolutePath, markdown, "utf8");
-  const user = update(context, id, (current) => ({ ...current, aliases: Array.from(new Set([...list(current.aliases), ...aliases, name])), personPath, updatedAt: context.nowIso() }));
+  const user = update(context, id, (current) => ({ ...current, aliases: Array.from(new Set([...list(current.aliases), ...requestedAliases, ...(requestedName ? [requestedName] : [])])), personPath, updatedAt: context.nowIso() }));
   context.output({ ok: true, changed: JSON.stringify(previous) !== JSON.stringify(user) || existing !== markdown, userId: id, personPath, user });
 }
 
