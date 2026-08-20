@@ -398,7 +398,7 @@ export class AiService {
       localMessageTime ? `requesterLocalTime=${localMessageTime.localDateTime} (${localMessageTime.timezone})` : "",
     ].filter(Boolean).join("\n");
     const savedFiles = input.uploadedFiles && input.uploadedFiles.length > 0
-      ? ["Saved files:", ...(input.uploadedFiles || []).map((file) => `- ${file.savedPath} (${file.mimeType}, ${Math.ceil(file.sizeBytes / 1024)} KB)`)].join("\n")
+      ? ["Saved files:", ...(input.uploadedFiles || []).map((file) => `- ${file.absolutePath} (${file.mimeType}, ${Math.ceil(file.sizeBytes / 1024)} KB)`)].join("\n")
       : "";
     const prompt = this.renderPromptTemplate("assistant-turn", {
       turnContext,

@@ -19,7 +19,7 @@ export function buildPrompt(text: string, uploadedFiles: UploadedFile[], default
   const local = formatIsoInTimezoneParts(messageTime, requesterTimezone?.trim() || defaultTimezone);
   return [
     uploadedFiles.length ? "Files:" : "",
-    ...uploadedFiles.map((file) => `- ${file.savedPath} (${file.mimeType}, ${Math.ceil(file.sizeBytes / 1024)} KB)`),
+    ...uploadedFiles.map((file) => `- ${file.absolutePath} (${file.mimeType}, ${Math.ceil(file.sizeBytes / 1024)} KB)`),
     sharedConversationContextText || "",
     local ? `requesterLocalTime=${local.localDateTime} (${local.timezone})` : "",
     "permissions=full",

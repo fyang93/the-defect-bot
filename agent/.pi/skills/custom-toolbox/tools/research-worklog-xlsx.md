@@ -23,7 +23,7 @@ Behavior:
 Example:
 
 ```bash
-uv run scripts/fill_research_worklog.py 'tmp/telegram/2026-04-20/研究業務日誌（2026.3）.xlsx'
+uv run scripts/fill_research_worklog.py '../tmp/feishu/2026-04-20/研究業務日誌（2026.3）.xlsx'
 ```
 
 ## Notes

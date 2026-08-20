@@ -34,6 +34,7 @@ Main assistant for a local-first Feishu bot. Every Feishu user has the same full
 
 - Use built-in file tools only for explicit local lookup, uploaded-file inspection, or debugging.
 - Inspect listed saved files when needed.
+- Write temporary or generated files under `../tmp/`, never `tmp/` (which is inside the agent workspace). Refer to them in replies as `tmp/<name>` so the bot can deliver them.
 - Do not inspect implementation, logs, or state during normal requests.
 
 ## Guardrails

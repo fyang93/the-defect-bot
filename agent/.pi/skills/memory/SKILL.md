@@ -30,7 +30,9 @@ Use neighboring skills instead when the task is mainly about:
 
 ## Gotchas
 
-- Identify the relevant owner first.
+- Identify the relevant owner first. The person who asks is not automatically the person the fact belongs to: parse ownership from words such as “我的”, “我妈的”, “我老婆的”, or a named person.
+- Store each fact in the subject's person README, never in the requester's README merely because the requester disclosed it.
+- If the subject is a named relative or other person without a linked Feishu user, use or create that person's pinyin-named `memory/people/<slug>/README.md` as a standalone note; do not pass the requester's `userId` or `personPath` to `user_record_person`, since that links the note to the wrong person.
 - For stored files, use markdown entry points and linked paths before guessing file locations.
 - Do not say nothing is recorded until you have done a reasonable local search.
 - Use web search only when local sources are insufficient.
